@@ -1,5 +1,7 @@
 import core.builtins.*;
+import chip8.test;
 
 fun main() = {
+    print(test());
     return 0;
 }
