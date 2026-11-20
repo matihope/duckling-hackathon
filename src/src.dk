@@ -1,7 +1,23 @@
 import core.builtins.*;
+import core.containers.*;
 import chip8.test;
+import utils.read_cmdline;
+import utils.read_file;
+import utils.exit_with_error;
+
+fun printOk(s: ref String) -> i64 = {
+    print(s);
+    return 0;
+}
 
 fun main() = {
-    print(test());
+    var args = read_cmdline();
+    if (args.isEmpty()) exit_with_error("Give me a path");
+    if (args.value().length() < 2i64) exit_with_error("File path is invalid");
+
+    match (read_file(args.value().at(1i64).asSlice())) {
+        case content: String = print(&content);
+        case _ = exit_with_error("Could not read file");
+    };
     return 0;
 }
