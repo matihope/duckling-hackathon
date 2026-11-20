@@ -1,0 +1,22 @@
+# Duckling build artifacts (package builds and `duck run-script` outputs,
+# which land next to the script, so match at any depth)
+.duck_build/
+
+# Note: quackfreeze.json is the dependency lockfile — keep it committed.
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.*
