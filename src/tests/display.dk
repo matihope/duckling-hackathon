@@ -1,0 +1,50 @@
+#{
+# `Display` tests: pixel flipping, resolution switches and shifting.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.display.Display;
+import src.testing.TestCase;
+import src.testing.check;
+import src.testing.checkEq;
+
+fun testFlipReportsCollision() = {
+	var d: Display;
+	d.dirty = false;
+	check(not d.flip(3, 4), "first flip: pixel was off");
+	check(d.get(3, 4), "pixel on");
+	check(d.dirty, "flip marks dirty");
+	check(d.flip(3, 4), "second flip: pixel was on (collision)");
+	check(not d.get(3, 4), "pixel off again");
+}
+
+fun testSetHiresClearsAndResizes() = {
+	var d: Display;
+	d.flip(0, 0);
+	d.setHires(true);
+	checkEq(d.width(), 128, "hires width");
+	checkEq(d.height(), 64, "hires height");
+	check(not d.get(0, 0), "switch cleared the screen");
+	d.setHires(false);
+	checkEq(d.width(), 64, "lores width");
+	checkEq(d.height(), 32, "lores height");
+}
+
+fun testShiftMovesAndDropsPixels() = {
+	var d: Display;
+	d.flip(0, 0);
+	d.flip(63, 31); # bottom-right corner
+	d.shift(4, 2);
+	check(d.get(4, 2), "moved right 4, down 2");
+	check(not d.get(0, 0), "old position cleared");
+	check(not d.get(63, 31), "corner pixel shifted off the screen");
+	d.shift(-4, -2);
+	check(d.get(0, 0), "moved back");
+	check(not d.get(4, 2), "nothing left behind");
+}
+
+fun addDisplayTests(tests: ref List[TestCase]) = {
+	tests.push(TestCase("display.flip_collision", testFlipReportsCollision));
+	tests.push(TestCase("display.set_hires", testSetHiresClearsAndResizes));
+	tests.push(TestCase("display.shift", testShiftMovesAndDropsPixels));
+}

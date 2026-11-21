@@ -65,7 +65,7 @@ fun testHiresAndBigSprite() = {
 		": main  hires  i := big  v0 := 100  v1 := 40  sprite v0 v1 0  : spin  jump spin  : big  0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x80 0x01"
 	);
 	c.run(5);
-	check(c.hires, "hires on");
+	check(c.display.hires, "hires on");
 	checkEq(c.width(), 128, "width");
 	checkEq(c.height(), 64, "height");
 	check(c.pixel(100, 40), "16x16 top-left");
@@ -81,10 +81,10 @@ fun testResolutionSwitchClears() = {
 	expand octo("c", ": main  i := dot  sprite v0 v0 1  hires  : spin  jump spin  : dot  0x80");
 	c.run(2);
 	check(c.pixel(0, 0), "drawn in lores");
-	c.screenDirty = false;
+	c.display.dirty = false;
 	c.run(1);
 	check(not c.pixel(0, 0), "hires cleared the screen");
-	check(c.screenDirty, "and marked it dirty");
+	check(c.display.dirty, "and marked it dirty");
 }
 
 fun testScrolling() = {
@@ -131,7 +131,7 @@ fun testRejectedInChip8Mode() = {
 	expand octo("c", ": main  hires");
 	c.run(1);
 	check(not c.running(), "halted");
-	check(not c.hires, "stayed in lores");
+	check(not c.display.hires, "stayed in lores");
 }
 
 fun addSuperChipTests(tests: ref List[TestCase]) = {

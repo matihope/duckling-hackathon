@@ -1,7 +1,7 @@
 #{
 # CHIP-8 interpreter core: memory, registers, timers, display and keypad state.
 # No I/O here; a frontend calls `run()` / `tickTimers()`, feeds `keys` and
-# redraws only when `screenDirty` is set.
+# redraws only when `display.dirty` is set.
 #
 # The instruction set lives in `isa` (one table, compiled into the instruction
 # classes, `decode` and the dispatch below); the quirks of each machine in
@@ -15,17 +15,13 @@ import src.result.Result;
 import isa.*;
 import isa.instructions.*;
 import platform.*;
+import src.display.Display;
 
 extern ("C") {
 	fundecl rand() -> i32;
 }
 
 # ========== CONSTANTS ===========
-const LORES_W: i64 = 64;
-const LORES_H: i64 = 32;
-const HIRES_W: i64 = 128;
-const HIRES_H: i64 = 64;
-const DISPLAY_SIZE: i64 = HIRES_W * HIRES_H;
 const MEMORY_SIZE: i64 = 4096;
 const PROGRAM_START: u16 = 0x200u16;
 const FONT_START: i64 = 0x50;
@@ -126,12 +122,10 @@ class Chip8 {
 	sp: i64 = 0;
 	dt: u8 = 0u8; # delay timer
 	st: u8 = 0u8; # sound timer
-	hires: bool = false; # SUPER-CHIP 128x64 mode
+	display: Display; # also holds the hires flag and the dirty flag for the frontend
 	# `u8` (0 or 1), not `bool`: a `bool[N]` field breaks the class layout in duckc
-	# (BUGS.md). Read pixels through `pixel()`, write keys through `setKey()`.
-	display: u8[DISPLAY_SIZE]; # pixel (x, y) at y * width() + x
+	# (BUGS.md 32). Written through `setKey()`.
 	keys: u8[16]; # 1 while held; set by the frontend
-	screenDirty: bool = true; # display changed since the frontend last drew it
 	waitingForFrame: bool = false; # DXYN ran this frame (display wait quirk)
 	heldKey: ?i64 = none; # FX0A: key seen pressed, waiting for its release
 	status: Status = Running();
@@ -200,22 +194,16 @@ class Chip8 {
 	}
 
 	# Current resolution: 64x32, or 128x64 in SUPER-CHIP hires mode.
-	fun width() -> i64 = if hires then HIRES_W else LORES_W;
-	fun height() -> i64 = if hires then HIRES_H else LORES_H;
+	fun width() -> i64 = display.width();
+	fun height() -> i64 = display.height();
 
-	fun pixel(x: i64, y: i64) -> bool = display[y * width() + x] != 0u8;
+	fun pixel(x: i64, y: i64) -> bool = display.get(x, y);
 
 	#{
 	# Marks hex key `k` (0..15) as held or released.
 	#}
 	fun setKey(k: i64, down: bool) = {
 		keys[k] = down as u8;
-	}
-
-	fun clearDisplay() = {
-		var blank: u8[DISPLAY_SIZE];
-		display = blank;
-		screenDirty = true;
 	}
 
 	# ---------- helpers ----------
@@ -265,7 +253,7 @@ class Chip8 {
 	}
 
 	# ---------- instructions ----------
-	fun exec(it: Cls) = clearDisplay();
+	fun exec(it: Cls) = display.clear();
 
 	fun exec(it: Ret) = {
 		if (sp == 0) {
@@ -383,16 +371,14 @@ class Chip8 {
 			while (col < cols and x0 + col < w) {
 				let bits = mem[wrapAddr(i as i64 + row * bytesPerRow + col / 8)];
 				if (((bits >> (7 - col % 8) as u8) & 1u8) == 1u8) {
-					let idx = (y0 + row) * w + x0 + col;
-					if (display[idx] != 0u8) collision = 1u8;
-					display[idx] = display[idx] ^ 1u8;
+					if (display.flip(x0 + col, y0 + row)) collision = 1u8;
 				}
 				col = col + 1;
 			}
 			row = row + 1;
 		}
 		v[0xF] = collision;
-		screenDirty = true;
+		display.dirty = true; # even a sprite with no pixels set counts as a draw
 		waitingForFrame = platform.displayWait;
 	}
 
@@ -458,61 +444,16 @@ class Chip8 {
 	}
 
 	# ---------- SUPER-CHIP (dispatch checks the platform first) ----------
-	fun exec(it: ScrollDown) = {
-		let w = width();
-		var y = height() - 1;
-		while (y >= 0) {
-			var x: i64 = 0;
-			while (x < w) {
-				display[y * w + x] = (y >= it.n and display[(y - it.n) * w + x] != 0u8) as u8;
-				x = x + 1;
-			}
-			y = y - 1;
-		}
-		screenDirty = true;
-	}
-
-	fun exec(it: ScrollRight) = {
-		let w = width();
-		var y: i64 = 0;
-		while (y < height()) {
-			var x = w - 1;
-			while (x >= 0) {
-				display[y * w + x] = (x >= 4 and display[y * w + x - 4] != 0u8) as u8;
-				x = x - 1;
-			}
-			y = y + 1;
-		}
-		screenDirty = true;
-	}
-
-	fun exec(it: ScrollLeft) = {
-		let w = width();
-		var y: i64 = 0;
-		while (y < height()) {
-			var x: i64 = 0;
-			while (x < w) {
-				display[y * w + x] = (x < w - 4 and display[y * w + x + 4] != 0u8) as u8;
-				x = x + 1;
-			}
-			y = y + 1;
-		}
-		screenDirty = true;
-	}
+	fun exec(it: ScrollDown) = display.shift(0, it.n);
+	fun exec(it: ScrollRight) = display.shift(4, 0);
+	fun exec(it: ScrollLeft) = display.shift(-4, 0);
 
 	fun exec(it: Exit) = {
 		status = Exited();
 	}
 
-	fun exec(it: Lores) = {
-		hires = false;
-		clearDisplay();
-	}
-
-	fun exec(it: Hires) = {
-		hires = true;
-		clearDisplay();
-	}
+	fun exec(it: Lores) = display.setHires(false);
+	fun exec(it: Hires) = display.setHires(true);
 
 	fun exec(it: LoadBigFont) = {
 		i = (BIG_FONT_START + ((v[it.x] & 0xFu8) as i64) * 10) as u16;

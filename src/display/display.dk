@@ -1,0 +1,84 @@
+#{
+# A monochrome screen of 64x32 (lores) or 128x64 (hires) pixels.
+#
+# Shared by the CHIP-8 core, which draws into it, and the terminal renderer,
+# which reads it. Pixels are only reached through the methods below, so the
+# storage type is a detail of this file.
+#}
+import core.builtins.*;
+
+const LORES_W: i64 = 64;
+const LORES_H: i64 = 32;
+const HIRES_W: i64 = 128;
+const HIRES_H: i64 = 64;
+const DISPLAY_SIZE: i64 = HIRES_W * HIRES_H;
+
+class Display {
+	# `u8` (0 or 1), not `bool`: a `bool[N]` class field breaks the class layout
+	# in duckc (BUGS.md 32). Nothing outside this class depends on that.
+	# Pixel (x, y) is at `y * width() + x`.
+	pixels: u8[DISPLAY_SIZE];
+	hires: bool = false; # SUPER-CHIP 128x64 mode
+	dirty: bool = true; # changed since the frontend last drew it
+
+	# Current resolution: 64x32, or 128x64 in hires mode.
+	fun width() -> i64 = if hires then HIRES_W else LORES_W;
+	fun height() -> i64 = if hires then HIRES_H else LORES_H;
+
+	#{
+	# Whether pixel (`x`, `y`) is on.
+	#}
+	fun get(x: i64, y: i64) -> bool = pixels[y * width() + x] != 0u8;
+
+	#{
+	# Inverts pixel (`x`, `y`), as a sprite draw does. True when it was on
+	# before, which CHIP-8 reports as a collision in VF.
+	#}
+	fun flip(x: i64, y: i64) -> bool = {
+		let idx = y * width() + x;
+		let wasOn = pixels[idx] != 0u8;
+		pixels[idx] = pixels[idx] ^ 1u8;
+		dirty = true;
+		return wasOn;
+	}
+
+	#{
+	# Turns every pixel off.
+	#}
+	fun clear() = {
+		var blank: u8[DISPLAY_SIZE];
+		pixels = blank;
+		dirty = true;
+	}
+
+	#{
+	# Switches between lores and hires; the screen is cleared either way.
+	#}
+	fun setHires(on: bool) = {
+		hires = on;
+		clear();
+	}
+
+	#{
+	# Moves the picture by `dx` pixels right and `dy` down (negative: left / up).
+	# Pixels moved in from outside the screen are off.
+	#}
+	fun shift(dx: i64, dy: i64) = {
+		let w = width();
+		let h = height();
+		let old = pixels;
+		var y: i64 = 0;
+		while (y < h) {
+			var x: i64 = 0;
+			while (x < w) {
+				let sx = x - dx;
+				let sy = y - dy;
+				let on = sx >= 0 and sx < w and sy >= 0 and sy < h and old[sy * w + sx] != 0u8;
+				pixels[y * w + x] = on as u8;
+				x = x + 1;
+			}
+			y = y + 1;
+		}
+		dirty = true;
+	}
+}

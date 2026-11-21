@@ -144,7 +144,7 @@ class Screen {
 			appendCsi(&out, "2J");
 			term.writeAll(out.asSlice());
 			drawStatus(term, chip, title);
-			chip.screenDirty = true;
+			chip.display.dirty = true;
 		}
 		return ok;
 	}
@@ -165,10 +165,10 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) ->
 		keypad.apply(chip, now);
 		chip.runFrame();
 
-		if (chip.screenDirty) {
+		if (chip.display.dirty) {
 			let frame = renderFrame(&chip.display, screen.at);
 			term.writeAll(frame.asSlice());
-			chip.screenDirty = false;
+			chip.display.dirty = false;
 		}
 
 		let sound = chip.st > 0u8;

@@ -18,9 +18,27 @@ class Platform {
 #{
 # The original COSMAC VIP interpreter.
 #}
-fun cosmacVip() -> Platform = Platform("CHIP-8", false, true, true, true, false, true, 11);
+fun cosmacVip() -> Platform = Platform(
+	name = "CHIP-8",
+	superChipOps = false,
+	vfReset = true,
+	shiftVy = true,
+	memIncrement = true,
+	jumpVx = false,
+	displayWait = true,
+	cyclesPerFrame = 11
+);
 
 #{
 # SUPER-CHIP with the "modern" quirks Octo uses.
 #}
-fun superChip() -> Platform = Platform("SUPER-CHIP", true, false, false, false, true, false, 30);
+fun superChip() -> Platform = Platform(
+	name = "SUPER-CHIP",
+	superChipOps = true,
+	vfReset = false,
+	shiftVy = false,
+	memIncrement = false,
+	jumpVx = true,
+	displayWait = false,
+	cyclesPerFrame = 30
+);

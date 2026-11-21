@@ -111,12 +111,12 @@ fun testBcdAndMemory() = {
 
 fun testDrawCollisionAndDisplayWait() = {
 	var c = newChip8(cosmacVip());
-	c.screenDirty = false;
+	c.display.dirty = false;
 	expand octo("c", ": main  i := hex v0  sprite v1 v2 5  sprite v1 v2 5");
 	c.run(1);
-	check(not c.screenDirty, "LD F doesn't touch the screen");
+	check(not c.display.dirty, "LD F doesn't touch the screen");
 	c.run(5);
-	check(c.screenDirty, "draw marks screen dirty");
+	check(c.display.dirty, "draw marks screen dirty");
 	check(c.pixel(0, 0), "font 0 top-left pixel");
 	check(c.pixel(3, 0), "font 0 top-right pixel");
 	check(not c.pixel(1, 1), "font 0 hole");

@@ -65,3 +65,4 @@
     ```
     Gdy tablica jest ostatnim polem: `LLVM struct size mismatch for class ...`. Obejście: `u8[N]` z wartościami 0/1 (`Chip8.display`, `Chip8.keys`); dostęp przez `pixel()` i `setKey()`.
 33) Missing return statement nie daje source posititon
+34) Brakuje konstruktorów użytkowanika

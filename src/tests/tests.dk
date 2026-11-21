@@ -13,6 +13,7 @@ import src.utils.splitNul;
 import cpu.addCpuTests;
 import octo.addOctoTests;
 import schip.addSuperChipTests;
+import display.addDisplayTests;
 
 fun testU8Wraps() = {
 	let max = 255u8;
@@ -53,5 +54,6 @@ fun allTests() -> List[TestCase] = {
 	addCpuTests(&tests);
 	addOctoTests(&tests);
 	addSuperChipTests(&tests);
+	addDisplayTests(&tests);
 	return tests;
 }
