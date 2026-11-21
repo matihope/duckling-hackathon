@@ -1,0 +1,337 @@
+###########################################
+#
+#  FlappyDuck
+#
+#  A SUPER-CHIP game: keep the duck in the air and fly
+#  through the 32 px gaps between the pipes.
+#
+#  Run:  duck run flappyduck.8o --schip
+#  Keys: W (CHIP-8 key 5) flaps.
+#
+#  How it works:
+#  - The game ticks every TICK frames, timed with the delay
+#    timer (SUPER-CHIP mode has no display wait).
+#  - Pipes are never redrawn: each tick the whole screen does
+#    `scroll-left` (4 px) and only a 4 px strip of the new pipe
+#    is drawn at the right edge.
+#  - The duck and the score are XOR-erased before the scroll and
+#    drawn again after it. VF after drawing the duck = crash.
+#  - Terminals send no key releases, so the emulator counts a key
+#    as held for 300 ms after each byte. Detecting "pressed now,
+#    released before" would drop fast taps, so a held key flaps
+#    once every FLAP_COOL ticks (350 ms) instead.
+#  - Everything the player sees changing happens in one burst at
+#    the start of a tick, under 30 instructions, so it fits in a
+#    single frame of the emulator and never flickers. The rest of
+#    the tick computes where the duck goes on the next one.
+#
+###########################################
+
+:const FLAP_KEY     5    # W
+:const DUCK_X       20
+:const PIPE_X       124  # the 4 px strip scrolled in on the right
+:const FLAP_SPEED   251  # -5 px per tick
+:const FLAP_COOL    7    # ticks between flaps (350 ms; see the header)
+:const MAX_FALL     4    # px per tick
+:const TICK         3    # frames per game tick (20 ticks per second)
+:const PIPE_PERIOD  10   # ticks between pipes (40 px)
+:const FIRST_PASS   29   # ticks until the first pipe is behind the duck
+
+# string offsets into `strings`
+:const S-FLAPPY    0
+:const S-DUCK      7
+:const S-PRESS     12
+:const S-GAMEOVER  20
+:const S-SCORE     30
+
+:alias duck-y   v3
+:alias duck-x   v4
+:alias speed    v5   # signed: 251..255 up, 0..4 down
+:alias pipe-x   v6
+:alias next-y   v7   # where the duck is drawn on the next tick
+:alias gap-y    v8   # top of the 32 px gap: 8, 16 or 24
+:alias phase    v9   # 0..PIPE_PERIOD-1; pipes are drawn at 0 and 1
+:alias pass     va   # ticks until the next pipe is behind the duck
+:alias score    vb
+:alias cooldown vc   # ticks until the next flap is allowed
+:alias px       vd
+:alias py       ve
+
+: main
+	title-screen
+	loop
+		play
+		game-over-screen
+	again
+
+###########################################
+#  Screens
+###########################################
+
+: title-screen
+	lores
+	clear
+	v1 := 4   v2 := 3   vd := S-FLAPPY  draw-text
+	v1 := 4   v2 := 11  vd := S-DUCK    draw-text
+	i := big-duck
+	v1 := 42  v2 := 3
+	sprite v1 v2 0
+	v1 := 11  v2 := 25  vd := S-PRESS   draw-text
+	wait-flap
+;
+
+: game-over-screen
+	lores
+	clear
+	v1 := 5   v2 := 2   vd := S-GAMEOVER  draw-text
+	v1 := 4   v2 := 16  vd := S-SCORE     draw-text
+	i := score-digits
+	bcd score
+	load v2           # v0 hundreds, v1 tens, v2 ones
+	px := 36  py := 13
+	if v0 != 0 begin
+		px := 26
+		i := bighex v0
+		sprite px py 10
+		px := 36
+	end
+	i := bighex v1
+	sprite px py 10
+	px := 46
+	i := bighex v2
+	sprite px py 10
+	v1 := 11  v2 := 26  vd := S-PRESS  draw-text
+	wait-flap
+;
+
+# Waits for the flap key to be let go, then pressed.
+: wait-flap
+	vd := FLAP_KEY
+	loop while vd key   again
+	loop while vd -key  again
+;
+
+# Draws the string at `strings + vd` at (v1, v2), 6 px per letter.
+: draw-text
+	loop
+		i := strings
+		i += vd
+		load v0
+		while v0 != 0xFF
+		i := letters
+		i += v0
+		sprite v1 v2 5
+		v1 += 6
+		vd += 1
+	again
+;
+
+###########################################
+#  Game
+###########################################
+
+: play
+	hires
+	clear
+	duck-x := DUCK_X
+	duck-y := 24
+	next-y := 24
+	speed := FLAP_SPEED   # start with a flap
+	cooldown := FLAP_COOL # the key that started the game is still held
+	pipe-x := PIPE_X
+	phase := 0
+	gap-y := 16
+	pass := FIRST_PASS
+	score := 0
+	i := score-digits
+	bcd score
+	i := duck
+	sprite duck-x duck-y 8
+	i := score-tens
+	load v1
+	draw-digits
+
+	loop
+		loop
+			vf := delay
+			while vf != 0
+		again
+
+		# ---- burst: erase, scroll, redraw (keep under ~27 instructions) ----
+		i := duck
+		sprite duck-x duck-y 8        # erase the duck
+		i := score-tens
+		load v1                       # v0 tens, v1 ones
+		py := 2
+		px := 2   i := bighex v0  sprite px py 10   # erase the score
+		px := 12  i := bighex v1  sprite px py 10
+		scroll-left
+		duck-y := next-y
+		i := duck
+		sprite duck-x duck-y 8
+		v2 := vf                      # 1 = the duck hit a pipe
+		px := 2   i := bighex v0  sprite px py 10   # draw the score
+		px := 12  i := bighex v1  sprite px py 10
+		# ---- end of burst ----
+
+		vf := TICK
+		delay := vf
+		if v2 == 1 then jump crash
+
+		# a pipe is two 4 px strips
+		if phase == 0 then draw-column
+		if phase == 1 then draw-column
+		phase += 1
+		if phase == PIPE_PERIOD begin
+			phase := 0
+			new-gap
+		end
+
+		# flap: at most once per FLAP_COOL ticks
+		if cooldown != 0 then cooldown += 255
+		px := FLAP_KEY
+		if px key begin
+			if cooldown == 0 begin
+				speed := FLAP_SPEED
+				cooldown := FLAP_COOL
+			end
+		end
+
+		# gravity: where the duck goes next tick
+		if speed != MAX_FALL then speed += 1
+		next-y := duck-y
+		next-y += speed
+		if next-y > 56 begin
+			if next-y < 200 then jump crash   # would hit the ground
+			next-y := 0                      # wrapped above the top: stay at the top
+			speed := 0
+		end
+
+		# a pipe went past the duck
+		pass += 255
+		if pass == 0 begin
+			pass := PIPE_PERIOD
+			score += 1
+			score-changed
+		end
+	again
+
+# Swaps the score on screen for the new value of `score`.
+: score-changed
+	i := score-tens
+	load v1
+	draw-digits      # erase the old digits
+	i := score-digits
+	bcd score
+	i := score-tens
+	load v1
+	draw-digits      # draw the new ones
+	vf := 2
+	buzzer := vf
+;
+
+# Draws digits v0 v1 (tens, ones) in the top-left corner.
+: draw-digits
+	py := 2
+	px := 2   i := bighex v0  sprite px py 10
+	px := 12  i := bighex v1  sprite px py 10
+;
+
+: crash
+	vf := 20
+	buzzer := vf
+	vf := 50
+	delay := vf
+	loop
+		vf := delay
+		while vf != 0
+	again
+;
+
+# A 4 px wide strip at the right edge, full height except the gap.
+: draw-column
+	i := pipe-tall
+	v0 := 0   sprite pipe-x v0 0
+	v0 := 16  sprite pipe-x v0 0
+	v0 := 32  sprite pipe-x v0 0
+	v0 := 48  sprite pipe-x v0 0
+	# cut out the 32 px gap (XOR)
+	sprite pipe-x gap-y 0
+	v0 := gap-y
+	v0 += 16
+	sprite pipe-x v0 0
+;
+
+# Moves the gap by at most 8 px so every pipe can be reached:
+# up, same or down (same twice as likely), kept within 8..24.
+: new-gap
+	v0 := random 3
+	if v0 == 3 then v0 := 1   # 0 up, 1 same, 2 down
+	v0 <<= v0
+	v0 <<= v0
+	v0 <<= v0                 # * 8
+	gap-y += v0
+	gap-y += 248              # - 8
+	if gap-y == 0 then gap-y := 16
+	if gap-y == 32 then gap-y := 16
+;
+
+###########################################
+#  Data
+###########################################
+
+: score-digits  0     # hundreds (unused in play)
+: score-tens    0 0   # tens, ones
+
+: duck
+	0x0E  # ....XXX.
+	0x1B  # ...XX.XX
+	0x1E  # ...XXXX.
+	0x9C  # X..XXX..
+	0xFE  # XXXXXXX.
+	0xE6  # XXX..XX.
+	0x7C  # .XXXXX..
+	0x00  # ........
+
+: big-duck   # the duck at 2x, 16x16
+	0x00 0xFC  0x00 0xFC
+	0x03 0xCF  0x03 0xCF
+	0x03 0xFC  0x03 0xFC
+	0xC3 0xF0  0xC3 0xF0
+	0xFF 0xFC  0xFF 0xFC
+	0xFC 0x3C  0xFC 0x3C
+	0x3F 0xF0  0x3F 0xF0
+	0x00 0x00  0x00 0x00
+
+: pipe-tall   # 16x16 sprite, only the left 4 px set
+	0xF0 0x00  0xF0 0x00  0xF0 0x00  0xF0 0x00
+	0xF0 0x00  0xF0 0x00  0xF0 0x00  0xF0 0x00
+	0xF0 0x00  0xF0 0x00  0xF0 0x00  0xF0 0x00
+	0xF0 0x00  0xF0 0x00  0xF0 0x00  0xF0 0x00
+
+: letters   # 5 rows each; a letter's offset is its index * 5
+	0x00 0x00 0x00 0x00 0x00  # ' ' 0
+	0xF0 0x80 0xE0 0x80 0x80  # F   5
+	0x80 0x80 0x80 0x80 0xF0  # L   10
+	0x60 0x90 0xF0 0x90 0x90  # A   15
+	0xE0 0x90 0xE0 0x80 0x80  # P   20
+	0x88 0x50 0x20 0x20 0x20  # Y   25
+	0xE0 0x90 0x90 0x90 0xE0  # D   30
+	0x90 0x90 0x90 0x90 0x60  # U   35
+	0x70 0x80 0x80 0x80 0x70  # C   40
+	0x90 0xA0 0xC0 0xA0 0x90  # K   45
+	0x70 0x80 0xB0 0x90 0x70  # G   50
+	0x88 0xD8 0xA8 0x88 0x88  # M   55
+	0xF0 0x80 0xE0 0x80 0xF0  # E   60
+	0x60 0x90 0x90 0x90 0x60  # O   65
+	0x88 0x88 0x50 0x50 0x20  # V   70
+	0xE0 0x90 0xE0 0xA0 0x90  # R   75
+	0x70 0x80 0x60 0x10 0xE0  # S   80
+	0x88 0x88 0xA8 0xD8 0x88  # W   85
+
+: strings   # letter offsets, 0xFF ends a string
+	5 10 15 20 20 25 0xFF          # FLAPPY
+	30 35 40 45 0xFF               # DUCK
+	20 75 60 80 80 0 85 0xFF       # PRESS W
+	50 15 55 60 0 65 70 60 75 0xFF # GAME OVER
+	80 40 65 75 60 0xFF            # SCORE
