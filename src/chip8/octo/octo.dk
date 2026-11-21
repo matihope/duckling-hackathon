@@ -1,0 +1,1866 @@
+#{
+# Octo assembler: a port of Octo's js/compiler.js (github.com/JohnEarnest/Octo),
+# producing the same bytes as Octo.
+#
+# Runs at runtime (`assembleOcto`, used for `.8o` files) and at compile time
+# (`expand octo("chip", "...")` in tests), so it avoids anything the compile-time
+# evaluator can't run (libm: the `:calc` math functions are implemented here).
+#
+# Supported: every instruction (incl. SCHIP / XO-CHIP ones our core doesn't run),
+# labels and forward references, `if ... then`, `if ... begin ... else ... end`,
+# `loop ... while ... again`, `:const`, `:alias`, `:calc`, `:byte`, `:org`,
+# `:pointer`, `:unpack`, `:next`, `:call`, `:macro`, `:stringmode`, `:assert`.
+# `:breakpoint` / `:monitor` are parsed and ignored.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.result.Ok;
+import src.result.Err;
+import src.result.Result;
+
+# ========== JS NUMBER SEMANTICS (no libm) ===========
+
+const PI_VALUE: f64 = 3.141592653589793;
+const E_VALUE: f64 = 2.718281828459045;
+const LN2: f64 = 0.6931471805599453;
+const TWO_32: f64 = 4294967296.0;
+
+# Built without dividing by zero, which the compile-time evaluator rejects.
+fun infValue() -> f64 = {
+	let big: f64 = 1.0e308;
+	return big * 10.0;
+}
+
+fun nanValue() -> f64 = {
+	let inf = infValue();
+	return inf - inf;
+}
+
+# JS division, without ever dividing by zero.
+fun divF(x: f64, y: f64) -> f64 = {
+	if (y == 0.0) {
+		if (x == 0.0 or isNaN(x)) return nanValue();
+		if (x > 0.0) return infValue();
+		return -infValue();
+	}
+	return x / y;
+}
+
+fun isNaN(x: f64) -> bool = x != x;
+
+fun isFinite(x: f64) -> bool = not isNaN(x - x);
+
+# Rounds toward zero.
+fun truncF(x: f64) -> f64 = {
+	if (not isFinite(x) or x >= 4.0e18 or x <= -4.0e18) return x;
+	return (x as i64) as f64;
+}
+
+fun floorF(x: f64) -> f64 = {
+	let t = truncF(x);
+	if (t > x) return t - 1.0;
+	return t;
+}
+
+fun ceilF(x: f64) -> f64 = {
+	let t = truncF(x);
+	if (t < x) return t + 1.0;
+	return t;
+}
+
+# JS `%`: remainder with the sign of the dividend.
+fun fmodF(x: f64, y: f64) -> f64 = {
+	if (y == 0.0 or not isFinite(x) or isNaN(y)) return nanValue();
+	if (not isFinite(y)) return x;
+	return x - y * truncF(x / y);
+}
+
+# JS ToInt32.
+fun toInt32(x: f64) -> i64 = {
+	if (not isFinite(x)) return 0;
+	var i = fmodF(truncF(x), TWO_32) as i64;
+	if (i < 0) i = i + 4294967296;
+	if (i >= 2147483648) i = i - 4294967296;
+	return i;
+}
+
+fun int32F(v: i64) -> f64 = toInt32(v as f64) as f64;
+
+fun shiftRight32(v: i64, s: i64) -> i64 = {
+	if (v >= 0) return v >> s;
+	return -((-v - 1) >> s) - 1;
+}
+
+fun sqrtF(x: f64) -> f64 = {
+	if (isNaN(x) or x < 0.0) return nanValue();
+	if (x == 0.0 or not isFinite(x)) return x;
+	var g = x;
+	if (g < 1.0) g = 1.0;
+	var k: i64 = 0;
+	while (k < 2000) {
+		let n = 0.5 * (g + x / g);
+		if (n == g) break;
+		g = n;
+		k = k + 1;
+	}
+	return g;
+}
+
+fun expF(x: f64) -> f64 = {
+	if (isNaN(x)) return x;
+	if (x > 709.8) return infValue();
+	if (x < -745.2) return 0.0;
+	var k = (x / LN2) as i64;
+	let r = x - (k as f64) * LN2;
+	var term: f64 = 1.0;
+	var sum: f64 = 1.0;
+	var n: i64 = 1;
+	while (n < 30) {
+		term = term * r / (n as f64);
+		sum = sum + term;
+		n = n + 1;
+	}
+	while (k > 0) {
+		sum = sum * 2.0;
+		k = k - 1;
+	}
+	while (k < 0) {
+		sum = sum / 2.0;
+		k = k + 1;
+	}
+	return sum;
+}
+
+fun logF(x: f64) -> f64 = {
+	if (isNaN(x) or x < 0.0) return nanValue();
+	if (x == 0.0) return -infValue();
+	if (not isFinite(x)) return x;
+	var m = x;
+	var e: i64 = 0;
+	while (m >= 2.0) {
+		m = m / 2.0;
+		e = e + 1;
+	}
+	while (m < 1.0) {
+		m = m * 2.0;
+		e = e - 1;
+	}
+	let s = (m - 1.0) / (m + 1.0);
+	let s2 = s * s;
+	var term = s;
+	var sum: f64 = 0.0;
+	var n: i64 = 1;
+	while (n < 80) {
+		sum = sum + term / (n as f64);
+		term = term * s2;
+		n = n + 2;
+	}
+	return 2.0 * sum + (e as f64) * LN2;
+}
+
+fun reduceAngle(x: f64) -> f64 = {
+	let twoPi = 2.0 * PI_VALUE;
+	return x - twoPi * floorF(x / twoPi + 0.5);
+}
+
+fun sinF(x: f64) -> f64 = {
+	if (not isFinite(x)) return nanValue();
+	let r = reduceAngle(x);
+	var term = r;
+	var sum = r;
+	var n: i64 = 1;
+	while (n < 30) {
+		term = -term * r * r / (((2 * n) * (2 * n + 1)) as f64);
+		sum = sum + term;
+		n = n + 1;
+	}
+	return sum;
+}
+
+fun cosF(x: f64) -> f64 = {
+	if (not isFinite(x)) return nanValue();
+	let r = reduceAngle(x);
+	var term: f64 = 1.0;
+	var sum: f64 = 1.0;
+	var n: i64 = 1;
+	while (n < 30) {
+		term = -term * r * r / (((2 * n - 1) * (2 * n)) as f64);
+		sum = sum + term;
+		n = n + 1;
+	}
+	return sum;
+}
+
+fun powF(x: f64, y: f64) -> f64 = {
+	if (isNaN(y)) return nanValue();
+	if (y == 0.0) return 1.0;
+	if (isNaN(x)) return nanValue();
+	if (truncF(y) == y and y < 1.0e9 and y > -1.0e9) {
+		var n = y as i64;
+		let negative = n < 0;
+		if (negative) n = -n;
+		var base = x;
+		var result: f64 = 1.0;
+		while (n > 0) {
+			if ((n & 1) == 1) result = result * base;
+			base = base * base;
+			n = n >> 1;
+		}
+		if (negative) return divF(1.0, result);
+		return result;
+	}
+	if (x < 0.0) return nanValue();
+	if (x == 0.0) {
+		if (y > 0.0) return 0.0;
+		return infValue();
+	}
+	return expF(y * logF(x));
+}
+
+fun signF(x: f64) -> f64 = {
+	if (x > 0.0) return 1.0;
+	if (x < 0.0) return -1.0;
+	return x;
+}
+
+fun minF(x: f64, y: f64) -> f64 = {
+	if (isNaN(x) or isNaN(y)) return nanValue();
+	if (x < y) return x;
+	return y;
+}
+
+fun maxF(x: f64, y: f64) -> f64 = {
+	if (isNaN(x) or isNaN(y)) return nanValue();
+	if (x > y) return x;
+	return y;
+}
+
+fun boolF(b: bool) -> f64 = {
+	if (b) return 1.0;
+	return 0.0;
+}
+
+# Number as JS prints it (integers without a fraction).
+fun fmtNum(x: f64) -> String = {
+	if (isNaN(x)) return "NaN".toString();
+	if (not isFinite(x)) {
+		if (x > 0.0) return "Infinity".toString();
+		return "-Infinity".toString();
+	}
+	if (truncF(x) == x and x < 1.0e18 and x > -1.0e18) return (x as i64).toString();
+	return x.toString();
+}
+
+fun hexUpper(v: i64) -> String = {
+	let digits = "0123456789ABCDEF";
+	var out = "".toString();
+	var rest = v;
+	if (rest == 0) out.append('0');
+	while (rest > 0) {
+		out.prepend(digits[rest & 15]);
+		rest = rest >> 4;
+	}
+	return out;
+}
+
+# ========== TEXT HELPERS ===========
+
+# `a ++ b ++ c`; for messages with braces, which f-strings can't contain.
+fun quoted(a: str, b: str, c: str) -> String = {
+	var out = a.toString();
+	out.append(b);
+	out.append(c);
+	return out;
+}
+
+fun sameText(a: str, b: str) -> bool = {
+	if (a.length() != b.length()) return false;
+	var i: i64 = 0;
+	while (i < a.length()) {
+		if (a[i] != b[i]) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+fun startsWith(a: str, prefix: str) -> bool = {
+	if (a.length() < prefix.length()) return false;
+	var i: i64 = 0;
+	while (i < prefix.length()) {
+		if (a[i] != prefix[i]) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+# Whether `name` is one of the space-separated words in `list`.
+fun inWordList(list: str, name: str) -> bool = {
+	var start: i64 = 0;
+	while (start < list.length()) {
+		var end = start;
+		while (end < list.length() and list[end] != ' ') end = end + 1;
+		if (end - start == name.length()) {
+			var k: i64 = 0;
+			var same = true;
+			while (same and k < name.length()) {
+				same = list[start + k] == name[k];
+				k = k + 1;
+			}
+			if (same) return true;
+		}
+		start = end + 1;
+	}
+	return false;
+}
+
+const RESERVED: str = ":= |= &= ^= -= =- += >>= <<= == != < > <= >= key -key hex bighex random delay : :next :unpack :breakpoint :proto :alias :const :org ; return clear bcd save load buzzer if then begin else end jump jump0 native sprite loop while again scroll-down scroll-right scroll-left lores hires loadflags saveflags i audio plane scroll-up :macro :calc :byte :call :stringmode :assert :monitor :pointer pitch";
+const UNARY_OPS: str = "- ~ ! sin cos tan exp log abs sqrt sign ceil floor @";
+const BINARY_OPS: str = "- + * / % & | ^ << >> pow min max < > <= >= == !=";
+
+fun hexDigitValue(c: char) -> i64 = {
+	if ('0' <= c <= '9') return (c - '0') as i64;
+	if ('a' <= c <= 'f') return (c - 'a') as i64 + 10;
+	if ('A' <= c <= 'F') return (c - 'A') as i64 + 10;
+	return -1;
+}
+
+# Octo's parseNumber: [+-]0b..., [+-]0x..., [+-]digits; NaN otherwise.
+fun parseOctoNumber(t: str) -> f64 = {
+	var k: i64 = 0;
+	var negative = false;
+	if (t.length() > 0 and (t[0] == '-' or t[0] == '+')) {
+		negative = t[0] == '-';
+		k = 1;
+	}
+	var base: i64 = 10;
+	if (t.length() > k + 2 and t[k] == '0' and t[k + 1] == 'b') {
+		base = 2;
+		k = k + 2;
+	} else if (t.length() > k + 2 and t[k] == '0' and (t[k + 1] == 'x' or t[k + 1] == 'X')) {
+		base = 16;
+		k = k + 2;
+	}
+	if (k >= t.length()) return nanValue();
+	var value: f64 = 0.0;
+	while (k < t.length()) {
+		let d = hexDigitValue(t[k]);
+		if (d < 0 or d >= base) return nanValue();
+		value = value * (base as f64) + (d as f64);
+		k = k + 1;
+	}
+	if (negative) return -value;
+	return value;
+}
+
+fun pow10(e: i64) -> f64 = {
+	var r: f64 = 1.0;
+	var k: i64 = 0;
+	let n = if e < 0 then -e else e;
+	while (k < n) {
+		r = r * 10.0;
+		k = k + 1;
+	}
+	if (e < 0) return 1.0 / r;
+	return r;
+}
+
+# JS `Number(text)` for a token (no surrounding whitespace in tokens).
+fun jsNumber(t: str) -> f64 = {
+	if (t.length() == 0) return 0.0;
+	if (sameText(t, "Infinity") or sameText(t, "+Infinity")) return infValue();
+	if (sameText(t, "-Infinity")) return -infValue();
+	if (t.length() > 2 and t[0] == '0') {
+		var base: i64 = 0;
+		if (t[1] == 'x' or t[1] == 'X') base = 16;
+		if (t[1] == 'b' or t[1] == 'B') base = 2;
+		if (t[1] == 'o' or t[1] == 'O') base = 8;
+		if (base != 0) {
+			var parsed: f64 = 0.0;
+			var p: i64 = 2;
+			while (p < t.length()) {
+				let d = hexDigitValue(t[p]);
+				if (d < 0 or d >= base) return nanValue();
+				parsed = parsed * (base as f64) + (d as f64);
+				p = p + 1;
+			}
+			return parsed;
+		}
+	}
+	var k: i64 = 0;
+	var negative = false;
+	if (t[0] == '-' or t[0] == '+') {
+		negative = t[0] == '-';
+		k = 1;
+	}
+	var mantissa: f64 = 0.0;
+	var exponent: i64 = 0;
+	var digits: i64 = 0;
+	while (k < t.length() and '0' <= t[k] <= '9') {
+		mantissa = mantissa * 10.0 + ((t[k] - '0') as f64);
+		digits = digits + 1;
+		k = k + 1;
+	}
+	if (k < t.length() and t[k] == '.') {
+		k = k + 1;
+		while (k < t.length() and '0' <= t[k] <= '9') {
+			mantissa = mantissa * 10.0 + ((t[k] - '0') as f64);
+			exponent = exponent - 1;
+			digits = digits + 1;
+			k = k + 1;
+		}
+	}
+	if (digits == 0) return nanValue();
+	if (k < t.length() and (t[k] == 'e' or t[k] == 'E')) {
+		k = k + 1;
+		var expNegative = false;
+		if (k < t.length() and (t[k] == '-' or t[k] == '+')) {
+			expNegative = t[k] == '-';
+			k = k + 1;
+		}
+		var e: i64 = 0;
+		var expDigits: i64 = 0;
+		while (k < t.length() and '0' <= t[k] <= '9') {
+			e = e * 10 + (t[k] - '0') as i64;
+			expDigits = expDigits + 1;
+			k = k + 1;
+		}
+		if (expDigits == 0) return nanValue();
+		if (expNegative) e = -e;
+		exponent = exponent + e;
+	}
+	if (k != t.length()) return nanValue();
+	var value = mantissa;
+	if (exponent < 0) {
+		value = mantissa / pow10(-exponent);
+	} else if (exponent > 0) {
+		value = mantissa * pow10(exponent);
+	}
+	if (negative) return -value;
+	return value;
+}
+
+# ========== TOKENS ===========
+
+class Token {
+	text: String;          # identifier / keyword / string literal contents
+	isNumber: bool = false;
+	value: f64 = 0.0;      # when `isNumber`
+	line: i64 = 1;
+}
+
+fun numberToken(v: f64, line: i64) -> Token = Token(fmtNum(v), true, v, line);
+
+fun wordToken(text: ref String, line: i64) -> Token = {
+	let n = parseOctoNumber(text.asSlice());
+	if (isNaN(n)) return Token(copy text, false, 0.0, line);
+	return Token(copy text, true, n, line);
+}
+
+# ========== COMPILER STATE ===========
+
+class Sym {
+	name: String;
+	value: f64 = 0.0;
+	mutable: bool = false;   # defined by :calc, may be redefined
+}
+
+class Proto {
+	name: String;
+	addrs: List[i64];
+	line: i64 = 0;
+}
+
+class Macro {
+	name: String;
+	args: List[String];
+	body: List[Token];
+	calls: i64 = 0;
+}
+
+class ModeChar {
+	ch: char;
+	value: i64 = 0;
+	body: List[Token];
+}
+
+class StringMode {
+	name: String;
+	chars: List[ModeChar];
+	calls: i64 = 0;
+}
+
+fun findSym(list: ref List[Sym], name: str) -> i64 = {
+	var k: i64 = 0;
+	while (k < list.length()) {
+		if (sameText(list.at(k).name.asSlice(), name)) return k;
+		k = k + 1;
+	}
+	return -1;
+}
+
+fun setSym(list: ref List[Sym], name: str, value: f64, mutable: bool) = {
+	let k = findSym(list, name);
+	if (k >= 0) {
+		list.at(k).value = value;
+		list.at(k).mutable = mutable;
+	} else {
+		list.push(Sym(name.toString(), value, mutable));
+	}
+}
+
+class OctoCompiler {
+	rom: List[i64];            # -1 = not defined yet
+	here: i64 = 0x200;
+	tokens: List[Token];
+	cur: i64 = 0;
+	pending: List[Token];      # tokens spliced in by macros, last = next to read
+	line: i64 = 1;             # line of the last token read
+	lastLine: i64 = 1;         # line count of the source, for EOF errors
+	loops: List[i64];
+	loopLines: List[i64];
+	whiles: List[i64];         # -1 marks the start of a loop
+	branches: List[i64];
+	branchLines: List[i64];
+	branchIsElse: List[bool];
+	dict: List[Sym];           # labels
+	constants: List[Sym];
+	aliases: List[Sym];
+	protos: List[Proto];       # forward references
+	longproto: List[i64];      # addresses holding 16-bit forward references
+	macros: List[Macro];
+	modes: List[StringMode];
+	hasmain: bool = true;
+	failed: bool = false;
+	error: String;
+	errorLine: i64 = 0;
+
+	# ---------- errors ----------
+
+	fun fail(message: String) = {
+		failAt(move message, line);
+	}
+
+	fun failAt(message: String, at: i64) = {
+		if (not failed) {
+			failed = true;
+			error = move message;
+			errorLine = at;
+		}
+	}
+
+	# ---------- token stream ----------
+
+	fun remaining() -> i64 = pending.length() + tokens.length() - cur;
+
+	fun atEnd() -> bool = remaining() <= 0;
+
+	fun peekAt(k: i64) -> Token = {
+		if (k >= remaining()) return Token("".toString(), false, 0.0, lastLine);
+		if (k < pending.length()) return copy pending.at(pending.length() - 1 - k);
+		return copy tokens.at(cur + k - pending.length());
+	}
+
+	fun take() -> Token = {
+		if (atEnd()) {
+			failAt("Unexpected EOF.".toString(), lastLine);
+			return Token("".toString(), false, 0.0, lastLine);
+		}
+		var t: Token;
+		if (pending.length() > 0) {
+			t = pending.pop();
+		} else {
+			t = copy tokens.at(cur);
+			cur = cur + 1;
+		}
+		line = t.line;
+		return t;
+	}
+
+	# Puts `toks` in front of the remaining stream, in order.
+	fun insertFront(toks: ref List[Token]) = {
+		var k = toks.length() - 1;
+		while (k >= 0) {
+			pending.push(copy toks.at(k));
+			k = k - 1;
+		}
+	}
+
+	fun isWord(t: ref Token, word: str) -> bool = not t.isNumber and sameText(t.text.asSlice(), word);
+
+	fun peekIs(word: str) -> bool = {
+		if (atEnd()) return false;
+		var t = peekAt(0);
+		return isWord(&t, word);
+	}
+
+	fun expectWord(word: str) = {
+		var t = take();
+		if (not isWord(&t, word)) fail(f"Expected {word}, got '{t.text}'.");
+	}
+
+	fun isReserved(t: ref Token) -> bool = not t.isNumber and inWordList(RESERVED, t.text.asSlice());
+
+	# ---------- registers ----------
+
+	fun isRegisterToken(t: ref Token) -> bool = {
+		if (t.isNumber) return false;
+		if (findSym(&aliases, t.text.asSlice()) >= 0) return true;
+		if (t.text.length() != 2) return false;
+		let first: char = t.text.at(0);
+		let second: char = t.text.at(1);
+		return (first == 'v' or first == 'V') and hexDigitValue(second) >= 0;
+	}
+
+	fun peekIsRegister() -> bool = {
+		if (atEnd()) return false;
+		var t = peekAt(0);
+		return isRegisterToken(&t);
+	}
+
+	fun registerOf(t: ref Token) -> i64 = {
+		if (not isRegisterToken(t)) {
+			fail(f"Expected register, got '{t.text}'.");
+			return 0;
+		}
+		let alias = findSym(&aliases, t.text.asSlice());
+		if (alias >= 0) return aliases.at(alias).value as i64;
+		let second: char = t.text.at(1);
+		return hexDigitValue(second);
+	}
+
+	fun takeRegister() -> i64 = {
+		var t = take();
+		return registerOf(&t);
+	}
+
+	# ---------- output ----------
+
+	fun romAt(index: i64) -> i64 = {
+		if (index < 0 or index >= rom.length()) return 0;
+		let v = rom.at(index);
+		if (v < 0) return 0;
+		return v;
+	}
+
+	fun setRom(index: i64, value: i64) = {
+		if (index >= 0) {
+			while (rom.length() <= index) rom.push(-1);
+			rom.at(index) = value & 0xFF;
+		}
+	}
+
+	fun data(a: i64) = {
+		let index = here - 0x200;
+		if (index >= 0 and index < rom.length() and rom.at(index) >= 0) {
+			fail(f"Data overlap. Address 0x{hexUpper(here)} has already been defined.");
+		}
+		setRom(index, a);
+		here = here + 1;
+	}
+
+	fun inst(a: i64, b: i64) = {
+		data(a);
+		data(b);
+	}
+
+	fun immediate(op: i64, nnn: i64) = inst(op | ((nnn >> 8) & 0xF), nnn & 0xFF);
+
+	fun fourop(op: i64, x: i64, y: i64, n: i64) = inst((op << 4) | x, (y << 4) | (n & 0xF));
+
+	fun patchJump(addr: i64, dest: i64) = {
+		setRom(addr - 0x200, 0x10 | ((dest >> 8) & 0xF));
+		setRom(addr - 0x1FF, dest & 0xFF);
+	}
+
+	# ---------- names and values ----------
+
+	fun checkName(t: ref Token, kind: str) -> bool = {
+		if (isReserved(t) or (not t.isNumber and startsWith(t.text.asSlice(), "OCTO_"))) {
+			fail(f"The name '{t.text}' is reserved and cannot be used for a {kind}.");
+			return false;
+		}
+		return true;
+	}
+
+	fun identifier(kind: str) -> Token = {
+		var t = take();
+		if (t.isNumber) {
+			fail(f"Expected a name for a {kind}, got {t.text}.");
+		} else {
+			checkName(&t, kind);
+		}
+		return t;
+	}
+
+	fun stringToken() -> Token = {
+		var t = take();
+		if (t.isNumber) fail(f"Expected a string, got {t.text}.");
+		return t;
+	}
+
+	fun findProto(name: str) -> i64 = {
+		var k: i64 = 0;
+		while (k < protos.length()) {
+			if (sameText(protos.at(k).name.asSlice(), name)) return k;
+			k = k + 1;
+		}
+		return -1;
+	}
+
+	fun addProto(name: str, addr: i64) = {
+		var p: Proto;
+		p.name = name.toString();
+		p.addrs.push(addr);
+		p.line = line;
+		protos.push(move p);
+	}
+
+	fun valueFail(kind: str, t: ref Token, checkIfDefined: bool) = {
+		if (isRegisterToken(t)) {
+			fail(f"Expected {kind} value, but found the register {t.text}.");
+		} else if (isReserved(t)) {
+			fail(f"Expected {kind} value, but found the keyword '{t.text}'. Missing a token?");
+		} else if (checkIfDefined and findSym(&constants, t.text.asSlice()) < 0 and findSym(&dict, t.text.asSlice()) < 0) {
+			fail(f"Expected {kind} value, but found the undefined name '{t.text}'.");
+		}
+	}
+
+	fun rangeFail(v: f64, kind: str) = {
+		fail(f"Argument {fmtNum(v)} does not fit in {kind}.");
+	}
+
+	# i := long NNNN, :unpack long NNNN, :pointer
+	fun veryWideValue(noForward: bool, noOffset: bool) -> i64 = {
+		var t = take();
+		var target = here + 2;
+		if (noOffset) target = here;
+		var v = t.value;
+		if (not t.isNumber) {
+			valueFail("a 16-bit value", &t, false);
+			let name = t.text.asSlice();
+			let c = findSym(&constants, name);
+			let d = findSym(&dict, name);
+			let p = findProto(name);
+			if (c >= 0) {
+				v = constants.at(c).value;
+			} else if (d >= 0) {
+				v = dict.at(d).value;
+			} else if (noForward) {
+				fail(f"The reference to '{t.text}' may not be forward-declared.");
+				v = 0.0;
+			} else if (p >= 0) {
+				protos.at(p).addrs.push(target);
+				longproto.push(target);
+				v = 0.0;
+			} else {
+				checkName(&t, "label");
+				addProto(name, target);
+				longproto.push(target);
+				v = 0.0;
+			}
+		}
+		if (v < 0.0 or v > 65535.0) {
+			rangeFail(v, "16 bits");
+			return 0;
+		}
+		return toInt32(v) & 0xFFFF;
+	}
+
+	# call, jump, jump0, i := (may be forward references)
+	fun wideValueOf(t: ref Token) -> i64 = {
+		var v = t.value;
+		if (not t.isNumber) {
+			if (isRegisterToken(t)) {
+				fail(f"Expected a 12-bit value, but found the register {t.text}.");
+				return 0;
+			}
+			let name = t.text.asSlice();
+			let c = findSym(&constants, name);
+			let p = findProto(name);
+			let d = findSym(&dict, name);
+			if (c >= 0) {
+				v = constants.at(c).value;
+			} else if (p >= 0) {
+				protos.at(p).addrs.push(here);
+				v = 0.0;
+			} else if (d >= 0) {
+				v = dict.at(d).value;
+			} else {
+				checkName(t, "label");
+				addProto(name, here);
+				v = 0.0;
+			}
+		}
+		if (v < 0.0 or v > 4095.0) {
+			rangeFail(v, "12 bits");
+			return 0;
+		}
+		return toInt32(v) & 0xFFF;
+	}
+
+	fun wideValue() -> i64 = {
+		var t = take();
+		return wideValueOf(&t);
+	}
+
+	# vx :=, vx +=, vx ==, vx !=, random
+	fun shortValueOf(t: ref Token) -> i64 = {
+		var v = t.value;
+		if (not t.isNumber) {
+			valueFail("an 8-bit", t, true);
+			let c = findSym(&constants, t.text.asSlice());
+			if (c < 0) {
+				fail(f"Argument '{t.text}' does not fit in a byte- must be in range [-128,255].");
+				return 0;
+			}
+			v = constants.at(c).value;
+		}
+		if (not (v >= -128.0 and v <= 255.0)) {
+			fail(f"Argument {fmtNum(v)} does not fit in a byte- must be in range [-128,255].");
+			return 0;
+		}
+		return toInt32(v) & 0xFF;
+	}
+
+	fun shortValue() -> i64 = {
+		var t = take();
+		return shortValueOf(&t);
+	}
+
+	# sprite height, :unpack high nybble
+	fun tinyValue() -> i64 = {
+		var t = take();
+		var v = t.value;
+		if (not t.isNumber) {
+			valueFail("a 4-bit", &t, true);
+			let c = findSym(&constants, t.text.asSlice());
+			if (c < 0) {
+				fail(f"Argument '{t.text}' does not fit in 4 bits- must be in range [0,15].");
+				return 0;
+			}
+			v = constants.at(c).value;
+		}
+		if (not (v >= 0.0 and v <= 15.0)) {
+			fail(f"Argument {fmtNum(v)} does not fit in 4 bits- must be in range [0,15].");
+			return 0;
+		}
+		return toInt32(v) & 0xF;
+	}
+
+	fun constantValue() -> f64 = {
+		var t = take();
+		if (t.isNumber) return t.value;
+		let name = t.text.asSlice();
+		let d = findSym(&dict, name);
+		let c = findSym(&constants, name);
+		if (findProto(name) >= 0) {
+			fail(f"A constant reference to '{t.text}' may not be forward-declared.");
+		} else if (isReserved(&t)) {
+			fail(f"Expected a constant name, but found the keyword '{t.text}'. Missing a token?");
+		} else if (d >= 0) {
+			return dict.at(d).value;
+		} else if (c >= 0) {
+			return constants.at(c).value;
+		} else {
+			fail(f"Undefined constant name '{t.text}'.");
+		}
+		return 0.0;
+	}
+
+	# ---------- :calc expressions ----------
+
+	fun parseTerminal(name: str) -> f64 = {
+		if (atEnd()) {
+			take();
+			return 0.0;
+		}
+		var x = peekAt(0);
+		if (isWord(&x, "PI")) {
+			take();
+			return PI_VALUE;
+		}
+		if (isWord(&x, "E")) {
+			take();
+			return E_VALUE;
+		}
+		if (isWord(&x, "HERE")) {
+			take();
+			return here as f64;
+		}
+		if (isRegisterToken(&x)) {
+			take();
+			return registerOf(&x) as f64;
+		}
+		if (x.isNumber) {
+			take();
+			return x.value;
+		}
+		let asNumber = jsNumber(x.text.asSlice());
+		if (not isNaN(asNumber)) {
+			take();
+			return asNumber;
+		}
+		let c = findSym(&constants, x.text.asSlice());
+		if (c >= 0) {
+			take();
+			return constants.at(c).value;
+		}
+		let d = findSym(&dict, x.text.asSlice());
+		if (d >= 0) {
+			take();
+			return dict.at(d).value;
+		}
+		if (findProto(x.text.asSlice()) >= 0) {
+			take();
+			fail(f"Cannot use forward declaration '{x.text}' when calculating constant '{name}'.");
+			return 0.0;
+		}
+		var open = take();
+		if (not isWord(&open, "(")) {
+			fail(f"Found undefined name '{open.text}' when calculating constant '{name}'.");
+			return 0.0;
+		}
+		let value = parseCalc(name);
+		var close = take();
+		if (not isWord(&close, ")")) fail(f"Expected ')' for calculated constant '{name}'.");
+		return value;
+	}
+
+	fun applyUnary(op: str, x: f64) -> f64 = {
+		if (sameText(op, "-")) return -x;
+		if (sameText(op, "~")) return (-toInt32(x) - 1) as f64;
+		if (sameText(op, "!")) return boolF(x == 0.0 or isNaN(x));
+		if (sameText(op, "sin")) return sinF(x);
+		if (sameText(op, "cos")) return cosF(x);
+		if (sameText(op, "tan")) return divF(sinF(x), cosF(x));
+		if (sameText(op, "exp")) return expF(x);
+		if (sameText(op, "log")) return logF(x);
+		if (sameText(op, "abs")) {
+			if (x < 0.0) return -x;
+			return x;
+		}
+		if (sameText(op, "sqrt")) return sqrtF(x);
+		if (sameText(op, "sign")) return signF(x);
+		if (sameText(op, "ceil")) return ceilF(x);
+		if (sameText(op, "floor")) return floorF(x);
+		# "@": peek at the ROM built so far
+		return romAt(toInt32(x) - 0x200) as f64;
+	}
+
+	fun applyBinary(op: str, x: f64, y: f64) -> f64 = {
+		if (sameText(op, "-")) return x - y;
+		if (sameText(op, "+")) return x + y;
+		if (sameText(op, "*")) return x * y;
+		if (sameText(op, "/")) return divF(x, y);
+		if (sameText(op, "%")) return fmodF(x, y);
+		if (sameText(op, "&")) return int32F(toInt32(x) & toInt32(y));
+		if (sameText(op, "|")) return int32F(toInt32(x) | toInt32(y));
+		if (sameText(op, "^")) return int32F(toInt32(x) ^ toInt32(y));
+		if (sameText(op, "<<")) return int32F(toInt32(x) << (toInt32(y) & 31));
+		if (sameText(op, ">>")) return shiftRight32(toInt32(x), toInt32(y) & 31) as f64;
+		if (sameText(op, "pow")) return powF(x, y);
+		if (sameText(op, "min")) return minF(x, y);
+		if (sameText(op, "max")) return maxF(x, y);
+		if (sameText(op, "<")) return boolF(x < y);
+		if (sameText(op, ">")) return boolF(x > y);
+		if (sameText(op, "<=")) return boolF(x <= y);
+		if (sameText(op, ">=")) return boolF(x >= y);
+		if (sameText(op, "==")) return boolF(x == y);
+		return boolF(x != y);
+	}
+
+	# UNARY expr | terminal BINARY expr | terminal  (right-associative, no precedence)
+	fun parseCalc(name: str) -> f64 = {
+		if (failed) return 0.0;
+		if (peekIs("strlen")) {
+			take();
+			var s = stringToken();
+			return s.text.length() as f64;
+		}
+		if (not atEnd()) {
+			var t = peekAt(0);
+			if (not t.isNumber and inWordList(UNARY_OPS, t.text.asSlice())) {
+				take();
+				let x = parseCalc(name);
+				return applyUnary(t.text.asSlice(), x);
+			}
+		}
+		let left = parseTerminal(name);
+		if (not atEnd()) {
+			var t = peekAt(0);
+			if (not t.isNumber and inWordList(BINARY_OPS, t.text.asSlice())) {
+				take();
+				let right = parseCalc(name);
+				return applyBinary(t.text.asSlice(), left, right);
+			}
+		}
+		return left;
+	}
+
+	fun parseCalculated(name: str) -> f64 = {
+		var open = take();
+		if (not isWord(&open, "{")) {
+			fail(quoted("Expected '{' for calculated constant '", name, "'."));
+			return 0.0;
+		}
+		let value = parseCalc(name);
+		var close = take();
+		if (not isWord(&close, "}")) fail(quoted("Expected '}' for calculated constant '", name, "'."));
+		return value;
+	}
+
+	fun macroBody(name: str, desc: str) -> List[Token] = {
+		var body: List[Token];
+		var open = take();
+		if (not isWord(&open, "{")) {
+			fail(quoted(quoted("Expected '{' for definition of ", desc, " '").asSlice(), name, "'."));
+			return body;
+		}
+		var depth: i64 = 1;
+		while (not atEnd() and not failed) {
+			if (peekIs("{")) depth = depth + 1;
+			if (peekIs("}")) depth = depth - 1;
+			if (depth == 0) break;
+			body.push(take());
+		}
+		var close = take();
+		if (not isWord(&close, "}")) fail(quoted(quoted("Expected '}' for definition of ", desc, " '").asSlice(), name, "'."));
+		return body;
+	}
+
+	# ---------- statements ----------
+
+	fun conditional(negated: bool) = {
+		let r = takeRegister();
+		var opToken = take();
+		var op = opToken.text.asSlice();
+		if (opToken.isNumber) op = "?";
+		if (negated) {
+			if (sameText(op, "==")) {
+				op = "!=";
+			} else if (sameText(op, "!=")) {
+				op = "==";
+			} else if (sameText(op, "key")) {
+				op = "-key";
+			} else if (sameText(op, "-key")) {
+				op = "key";
+			} else if (sameText(op, "<")) {
+				op = ">=";
+			} else if (sameText(op, ">")) {
+				op = "<=";
+			} else if (sameText(op, ">=")) {
+				op = "<";
+			} else if (sameText(op, "<=")) {
+				op = ">";
+			}
+		}
+		if (sameText(op, "==")) {
+			if (peekIsRegister()) {
+				inst(0x90 | r, takeRegister() << 4);
+			} else {
+				inst(0x40 | r, shortValue());
+			}
+		} else if (sameText(op, "!=")) {
+			if (peekIsRegister()) {
+				inst(0x50 | r, takeRegister() << 4);
+			} else {
+				inst(0x30 | r, shortValue());
+			}
+		} else if (sameText(op, "key")) {
+			inst(0xE0 | r, 0xA1);
+		} else if (sameText(op, "-key")) {
+			inst(0xE0 | r, 0x9E);
+		} else if (sameText(op, ">") or sameText(op, "<") or sameText(op, ">=") or sameText(op, "<=")) {
+			if (peekIsRegister()) {
+				fourop(0x8, 0xF, takeRegister(), 0x0);
+			} else {
+				inst(0x6F, shortValue());
+			}
+			if (sameText(op, ">") or sameText(op, "<=")) {
+				fourop(0x8, 0xF, r, 0x5);      # vf -= vx
+			} else {
+				fourop(0x8, 0xF, r, 0x7);      # vf =- vx
+			}
+			if (sameText(op, ">") or sameText(op, "<")) {
+				inst(0x4F, 0);                 # if vf != 0 then
+			} else {
+				inst(0x3F, 0);                 # if vf == 0 then
+			}
+		} else if (opToken.isNumber) {
+			fail(f"Expected conditional operator, got {opToken.text}.");
+		} else {
+			fail(f"Expected conditional operator, got '{opToken.text}'.");
+		}
+	}
+
+	# The `then` / `begin` that ends the condition starting at the next token.
+	fun controlToken() -> Token = {
+		let rem = remaining();
+		if (rem < 2) {
+			failAt("Unexpected EOF.".toString(), lastLine);
+			return peekAt(0);
+		}
+		var op = peekAt(1);
+		var index: i64 = 3;
+		if (isWord(&op, "key") or isWord(&op, "-key")) index = 2;
+		if (index >= rem) index = rem - 1;
+		return peekAt(index);
+	}
+
+	fun iassign(op: ref Token) = {
+		if (isWord(op, ":=")) {
+			var o = take();
+			if (isWord(&o, "hex")) {
+				inst(0xF0 | takeRegister(), 0x29);
+			} else if (isWord(&o, "bighex")) {
+				inst(0xF0 | takeRegister(), 0x30);
+			} else if (isWord(&o, "long")) {
+				let addr = veryWideValue(false, false);
+				inst(0xF0, 0x00);
+				inst((addr >> 8) & 0xFF, addr & 0xFF);
+			} else {
+				immediate(0xA0, wideValueOf(&o));
+			}
+		} else if (isWord(op, "+=")) {
+			inst(0xF0 | takeRegister(), 0x1E);
+		} else {
+			fail(f"'{op.text}' is not an operator that can target the i register.");
+		}
+	}
+
+	fun vassign(r: i64) = {
+		var op = take();
+		if (isWord(&op, ":=")) {
+			var o = take();
+			if (isRegisterToken(&o)) {
+				fourop(0x8, r, registerOf(&o), 0x0);
+			} else if (isWord(&o, "random")) {
+				inst(0xC0 | r, shortValue());
+			} else if (isWord(&o, "key")) {
+				inst(0xF0 | r, 0x0A);
+			} else if (isWord(&o, "delay")) {
+				inst(0xF0 | r, 0x07);
+			} else {
+				inst(0x60 | r, shortValueOf(&o));
+			}
+		} else if (isWord(&op, "+=")) {
+			if (peekIsRegister()) {
+				fourop(0x8, r, takeRegister(), 0x4);
+			} else {
+				inst(0x70 | r, shortValue());
+			}
+		} else if (isWord(&op, "|=")) {
+			fourop(0x8, r, takeRegister(), 0x1);
+		} else if (isWord(&op, "&=")) {
+			fourop(0x8, r, takeRegister(), 0x2);
+		} else if (isWord(&op, "^=")) {
+			fourop(0x8, r, takeRegister(), 0x3);
+		} else if (isWord(&op, "-=")) {
+			if (peekIsRegister()) {
+				fourop(0x8, r, takeRegister(), 0x5);
+			} else {
+				inst(0x70 | r, (256 - shortValue()) & 0xFF);
+			}
+		} else if (isWord(&op, "=-")) {
+			fourop(0x8, r, takeRegister(), 0x7);
+		} else if (isWord(&op, ">>=")) {
+			fourop(0x8, r, takeRegister(), 0x6);
+		} else if (isWord(&op, "<<=")) {
+			fourop(0x8, r, takeRegister(), 0xE);
+		} else {
+			fail(f"Unrecognized operator '{op.text}'.");
+		}
+	}
+
+	fun resolveLabel(offset: i64) = {
+		var target = here + offset;
+		var label = identifier("label");
+		if (failed) return;
+		let name = label.text.asSlice();
+		if ((target == 0x202 or target == 0x200) and sameText(name, "main")) {
+			hasmain = false;
+			here = 0x200;
+			if (rom.length() > 0) rom.at(0) = -1;
+			if (rom.length() > 1) rom.at(1) = -1;
+			target = here;
+		}
+		if (findSym(&dict, name) >= 0) {
+			fail(f"The name '{label.text}' has already been defined.");
+			return;
+		}
+		if (findSym(&aliases, name) >= 0) {
+			fail(f"The name '{label.text}' is already used by an alias.");
+			return;
+		}
+		dict.push(Sym(copy label.text, target as f64, false));
+
+		let p = findProto(name);
+		if (p >= 0) {
+			var k: i64 = 0;
+			while (k < protos.at(p).addrs.length()) {
+				let addr = protos.at(p).addrs.at(k);
+				var isLong = false;
+				var j: i64 = 0;
+				while (j < longproto.length()) {
+					if (longproto.at(j) == addr) isLong = true;
+					j = j + 1;
+				}
+				let isUnpack = (romAt(addr - 0x200) & 0xF0) == 0x60;
+				if (isLong and isUnpack) {
+					setRom(addr - 0x1FF, (target >> 8) & 0xFF);
+					setRom(addr - 0x1FD, target & 0xFF);
+				} else if (isLong) {
+					setRom(addr - 0x200, (target >> 8) & 0xFF);
+					setRom(addr - 0x1FF, target & 0xFF);
+				} else if ((target & 0xFFF) != target) {
+					fail(f"Value 0x{hexUpper(target)} for label '{label.text}' does not fit in 12 bits.");
+				} else if (isUnpack) {
+					setRom(addr - 0x1FF, (romAt(addr - 0x1FF) & 0xF0) | ((target >> 8) & 0xF));
+					setRom(addr - 0x1FD, target & 0xFF);
+				} else {
+					setRom(addr - 0x200, (romAt(addr - 0x200) & 0xF0) | ((target >> 8) & 0xF));
+					setRom(addr - 0x1FF, target & 0xFF);
+				}
+				k = k + 1;
+			}
+			var rest: List[Proto];
+			var q: i64 = 0;
+			while (q < protos.length()) {
+				if (q != p) rest.push(copy protos.at(q));
+				q = q + 1;
+			}
+			protos = move rest;
+		}
+	}
+
+	fun findMacro(name: str) -> i64 = {
+		var k: i64 = 0;
+		while (k < macros.length()) {
+			if (sameText(macros.at(k).name.asSlice(), name)) return k;
+			k = k + 1;
+		}
+		return -1;
+	}
+
+	fun findMode(name: str) -> i64 = {
+		var k: i64 = 0;
+		while (k < modes.length()) {
+			if (sameText(modes.at(k).name.asSlice(), name)) return k;
+			k = k + 1;
+		}
+		return -1;
+	}
+
+	fun expandMacro(m: i64) = {
+		let calls = macros.at(m).calls;
+		macros.at(m).calls = calls + 1;
+		var args: List[Token];
+		var a: i64 = 0;
+		while (a < macros.at(m).args.length() and not failed) {
+			if (atEnd()) {
+				failAt(f"Not enough arguments for expansion of macro '{macros.at(m).name}'.", lastLine);
+			} else {
+				args.push(take());
+			}
+			a = a + 1;
+		}
+		if (failed) return;
+		var expansion: List[Token];
+		var k: i64 = 0;
+		while (k < macros.at(m).body.length()) {
+			var chunk = copy macros.at(m).body.at(k);
+			var bound = false;
+			if (not chunk.isNumber) {
+				var b = macros.at(m).args.length() - 1;
+				while (not bound and b >= 0) {
+					if (sameText(macros.at(m).args.at(b).asSlice(), chunk.text.asSlice())) {
+						expansion.push(copy args.at(b));
+						bound = true;
+					}
+					b = b - 1;
+				}
+				if (not bound and sameText(chunk.text.asSlice(), "CALLS")) {
+					expansion.push(numberToken(calls as f64, chunk.line));
+					bound = true;
+				}
+			}
+			if (not bound) expansion.push(move chunk);
+			k = k + 1;
+		}
+		insertFront(&expansion);
+	}
+
+	fun defineStringMode() = {
+		var name = identifier("stringmode");
+		if (failed) return;
+		var m = findMode(name.text.asSlice());
+		if (m < 0) {
+			var mode: StringMode;
+			mode.name = copy name.text;
+			modes.push(move mode);
+			m = modes.length() - 1;
+		}
+		var alphabet = stringToken();
+		let alphabetLine = line;
+		var body = macroBody(name.text.asSlice(), "string mode");
+		if (failed) return;
+		var index: i64 = 0;
+		while (index < alphabet.text.length()) {
+			let ch: char = alphabet.text.at(index);
+			var k: i64 = 0;
+			while (k < modes.at(m).chars.length()) {
+				if (modes.at(m).chars.at(k).ch == ch) {
+					failAt(f"String mode '{name.text}' is already defined for the character '{ch}'.", alphabetLine);
+					return;
+				}
+				k = k + 1;
+			}
+			modes.at(m).chars.push(ModeChar(ch, index, copy body));
+			index = index + 1;
+		}
+	}
+
+	fun expandStringMode(m: i64) = {
+		var s = take();
+		let stringLine = line;
+		if (s.isNumber) {
+			fail(f"String mode '{modes.at(m).name}' cannot be applied to a number ({s.text}).");
+			return;
+		}
+		var expansion: List[Token];
+		var index: i64 = 0;
+		while (index < s.text.length()) {
+			let ch: char = s.text.at(index);
+			var found: i64 = -1;
+			var k: i64 = 0;
+			while (k < modes.at(m).chars.length()) {
+				if (modes.at(m).chars.at(k).ch == ch) found = k;
+				k = k + 1;
+			}
+			if (found < 0) {
+				failAt(f"String mode '{modes.at(m).name}' is not defined for the character '{ch}'.", stringLine);
+				return;
+			}
+			let calls = modes.at(m).calls;
+			modes.at(m).calls = calls + 1;
+			let value = modes.at(m).chars.at(found).value;
+			var b: i64 = 0;
+			while (b < modes.at(m).chars.at(found).body.length()) {
+				var chunk = copy modes.at(m).chars.at(found).body.at(b);
+				if (isWord(&chunk, "CALLS")) {
+					expansion.push(numberToken(calls as f64, chunk.line));
+				} else if (isWord(&chunk, "CHAR")) {
+					expansion.push(numberToken(((ch as u8) as i64) as f64, chunk.line));
+				} else if (isWord(&chunk, "INDEX")) {
+					expansion.push(numberToken(index as f64, chunk.line));
+				} else if (isWord(&chunk, "VALUE")) {
+					expansion.push(numberToken(value as f64, chunk.line));
+				} else {
+					expansion.push(move chunk);
+				}
+				b = b + 1;
+			}
+			index = index + 1;
+		}
+		insertFront(&expansion);
+	}
+
+	fun skipFormatOr(useVeryWide: bool) = {
+		var t = peekAt(0);
+		var isFormat = false;
+		if (not atEnd() and not t.isNumber) {
+			var k: i64 = 0;
+			while (k < t.text.length()) {
+				let c: char = t.text.at(k);
+				if (c == '%') isFormat = true;
+				k = k + 1;
+			}
+		}
+		if (isFormat) {
+			stringToken();
+		} else if (useVeryWide) {
+			veryWideValue(true, false);
+		} else {
+			tinyValue();
+		}
+	}
+
+	fun instruction(token: ref Token) = {
+		let w = token.text.asSlice();
+		let n = token.isNumber;
+		if (not n and sameText(w, ":")) {
+			resolveLabel(0);
+		} else if (not n and sameText(w, ":next")) {
+			resolveLabel(1);
+		} else if (not n and sameText(w, ":unpack")) {
+			var a: i64 = 0;
+			if (peekIs("long")) {
+				take();
+				a = veryWideValue(false, true);
+			} else {
+				let v = tinyValue();
+				a = (v << 12) | wideValue();
+			}
+			inst(0x60 | (aliases.at(findSym(&aliases, "unpack-hi")).value as i64), (a >> 8) & 0xFF);
+			inst(0x60 | (aliases.at(findSym(&aliases, "unpack-lo")).value as i64), a & 0xFF);
+		} else if (not n and sameText(w, ":breakpoint")) {
+			stringToken();
+		} else if (not n and sameText(w, ":monitor")) {
+			if (peekIsRegister()) {
+				takeRegister();
+				skipFormatOr(false);
+			} else {
+				veryWideValue(true, false);
+				skipFormatOr(true);
+			}
+		} else if (not n and sameText(w, ":proto")) {
+			take();
+		} else if (not n and sameText(w, ":alias")) {
+			var name = identifier("alias");
+			if (failed) return;
+			if (findSym(&dict, name.text.asSlice()) >= 0) {
+				fail(f"The name '{name.text}' is already used by a constant.");
+				return;
+			}
+			var value: i64 = 0;
+			if (peekIs("{")) {
+				value = toInt32(parseCalculated("ANONYMOUS"));
+			} else {
+				value = takeRegister();
+			}
+			if (value < 0 or value >= 16) {
+				fail("Register index must be in the range [0,F].".toString());
+				return;
+			}
+			setSym(&aliases, name.text.asSlice(), value as f64, false);
+		} else if (not n and sameText(w, ":const")) {
+			var name = identifier("constant");
+			if (failed) return;
+			if (findSym(&constants, name.text.asSlice()) >= 0) {
+				fail(f"The name '{name.text}' has already been defined.");
+				return;
+			}
+			let value = constantValue();
+			setSym(&constants, name.text.asSlice(), value, false);
+		} else if (not n and sameText(w, ":macro")) {
+			var name = identifier("macro");
+			if (failed) return;
+			if (findMacro(name.text.asSlice()) >= 0) {
+				fail(f"The name '{name.text}' has already been defined.");
+				return;
+			}
+			var m: Macro;
+			m.name = copy name.text;
+			while (not peekIs("{") and not atEnd() and not failed) {
+				var arg = take();
+				checkName(&arg, "macro argument");
+				m.args.push(copy arg.text);
+			}
+			m.body = macroBody(name.text.asSlice(), "macro");
+			macros.push(move m);
+		} else if (not n and findMacro(w) >= 0) {
+			expandMacro(findMacro(w));
+		} else if (not n and sameText(w, ":stringmode")) {
+			defineStringMode();
+		} else if (not n and findMode(w) >= 0) {
+			expandStringMode(findMode(w));
+		} else if (not n and sameText(w, ":calc")) {
+			var name = identifier("calculated constant");
+			if (failed) return;
+			let c = findSym(&constants, name.text.asSlice());
+			if (c >= 0 and not constants.at(c).mutable) {
+				fail(f"Cannot redefine the name '{name.text}' with :calc.");
+				return;
+			}
+			let value = parseCalculated(name.text.asSlice());
+			setSym(&constants, name.text.asSlice(), value, true);
+		} else if (not n and sameText(w, ":byte")) {
+			if (peekIs("{")) {
+				data(toInt32(parseCalculated("ANONYMOUS")));
+			} else {
+				data(shortValue());
+			}
+		} else if (not n and sameText(w, ":pointer")) {
+			var addr: i64 = 0;
+			if (peekIs("{")) {
+				addr = toInt32(parseCalculated("ANONYMOUS"));
+			} else {
+				addr = veryWideValue(false, true);
+			}
+			inst(shiftRight32(addr, 8), addr);
+		} else if (not n and sameText(w, ":org")) {
+			var addr: f64 = 0.0;
+			if (peekIs("{")) {
+				addr = parseCalculated("ANONYMOUS");
+			} else {
+				addr = constantValue();
+			}
+			here = 0xFFFF & toInt32(addr);
+		} else if (not n and sameText(w, ":assert")) {
+			var message = "".toString();
+			var hasMessage = false;
+			if (not peekIs("{")) {
+				var m = stringToken();
+				message = copy m.text;
+				hasMessage = true;
+			}
+			var label = "assert".toString();
+			if (hasMessage) label = f"assert {message}";
+			let value = parseCalculated(label.asSlice());
+			if (value == 0.0 or isNaN(value)) {
+				if (hasMessage) {
+					fail(f"Assertion failed: {message}");
+				} else {
+					fail("Assertion failed.".toString());
+				}
+			}
+		} else if (not n and (sameText(w, ";") or sameText(w, "return"))) {
+			inst(0x00, 0xEE);
+		} else if (not n and sameText(w, "clear")) {
+			inst(0x00, 0xE0);
+		} else if (not n and sameText(w, "bcd")) {
+			inst(0xF0 | takeRegister(), 0x33);
+		} else if (not n and (sameText(w, "save") or sameText(w, "load"))) {
+			let r = takeRegister();
+			let isSave = sameText(w, "save");
+			if (not atEnd() and peekIs("-")) {
+				take();
+				var low = 0x03;
+				if (isSave) low = 0x02;
+				inst(0x50 | r, (takeRegister() << 4) | low);
+			} else {
+				var low = 0x65;
+				if (isSave) low = 0x55;
+				inst(0xF0 | r, low);
+			}
+		} else if (not n and sameText(w, "delay")) {
+			expectWord(":=");
+			inst(0xF0 | takeRegister(), 0x15);
+		} else if (not n and sameText(w, "buzzer")) {
+			expectWord(":=");
+			inst(0xF0 | takeRegister(), 0x18);
+		} else if (not n and sameText(w, "pitch")) {
+			expectWord(":=");
+			inst(0xF0 | takeRegister(), 0x3A);
+		} else if (not n and sameText(w, "if")) {
+			var control = controlToken();
+			if (failed) return;
+			if (isWord(&control, "then")) {
+				conditional(false);
+				expectWord("then");
+			} else if (isWord(&control, "begin")) {
+				conditional(true);
+				expectWord("begin");
+				branches.push(here);
+				branchLines.push(line);
+				branchIsElse.push(false);
+				inst(0x00, 0x00);
+			} else {
+				failAt("Expected 'then' or 'begin'.".toString(), control.line);
+			}
+		} else if (not n and sameText(w, "else")) {
+			if (branches.length() < 1) {
+				fail("This 'else' does not have a matching 'begin'.".toString());
+				return;
+			}
+			branchLines.pop();
+			branchIsElse.pop();
+			patchJump(branches.pop(), here + 2);
+			branches.push(here);
+			branchLines.push(line);
+			branchIsElse.push(true);
+			inst(0x00, 0x00);
+		} else if (not n and sameText(w, "end")) {
+			if (branches.length() < 1) {
+				fail("This 'end' does not have a matching 'begin'.".toString());
+				return;
+			}
+			branchLines.pop();
+			branchIsElse.pop();
+			patchJump(branches.pop(), here);
+		} else if (not n and sameText(w, "jump0")) {
+			immediate(0xB0, wideValue());
+		} else if (not n and sameText(w, "jump")) {
+			immediate(0x10, wideValue());
+		} else if (not n and sameText(w, "native")) {
+			immediate(0x00, wideValue());
+		} else if (not n and sameText(w, "sprite")) {
+			let r1 = takeRegister();
+			let r2 = takeRegister();
+			let size = tinyValue();
+			inst(0xD0 | r1, (r2 << 4) | size);
+		} else if (not n and sameText(w, "loop")) {
+			loops.push(here);
+			loopLines.push(line);
+			whiles.push(-1);
+		} else if (not n and sameText(w, "while")) {
+			if (loops.length() < 1) {
+				fail("This 'while' is not within a loop.".toString());
+				return;
+			}
+			conditional(true);
+			whiles.push(here);
+			immediate(0x10, 0);
+		} else if (not n and sameText(w, "again")) {
+			if (loops.length() < 1) {
+				fail("This 'again' does not have a matching 'loop'.".toString());
+				return;
+			}
+			loopLines.pop();
+			immediate(0x10, loops.pop());
+			while (whiles.length() > 0 and whiles.at(whiles.length() - 1) != -1) {
+				patchJump(whiles.pop(), here);
+			}
+			if (whiles.length() > 0) whiles.pop();
+		} else if (not n and sameText(w, "plane")) {
+			let plane = tinyValue();
+			if (plane > 3) {
+				fail(f"The plane bitmask must be [0,3], was {plane}.");
+				return;
+			}
+			inst(0xF0 | plane, 0x01);
+		} else if (not n and sameText(w, "audio")) {
+			inst(0xF0, 0x02);
+		} else if (not n and sameText(w, "scroll-down")) {
+			inst(0x00, 0xC0 | tinyValue());
+		} else if (not n and sameText(w, "scroll-up")) {
+			inst(0x00, 0xD0 | tinyValue());
+		} else if (not n and sameText(w, "scroll-right")) {
+			inst(0x00, 0xFB);
+		} else if (not n and sameText(w, "scroll-left")) {
+			inst(0x00, 0xFC);
+		} else if (not n and sameText(w, "exit")) {
+			inst(0x00, 0xFD);
+		} else if (not n and sameText(w, "lores")) {
+			inst(0x00, 0xFE);
+		} else if (not n and sameText(w, "hires")) {
+			inst(0x00, 0xFF);
+		} else if (not n and sameText(w, "saveflags")) {
+			inst(0xF0 | takeRegister(), 0x75);
+		} else if (not n and sameText(w, "loadflags")) {
+			inst(0xF0 | takeRegister(), 0x85);
+		} else if (not n and sameText(w, "i")) {
+			var op = take();
+			iassign(&op);
+		} else if (isRegisterToken(token)) {
+			vassign(registerOf(token));
+		} else if (not n and sameText(w, ":call")) {
+			var addr: i64 = 0;
+			if (peekIs("{")) {
+				addr = toInt32(parseCalculated("ANONYMOUS"));
+			} else {
+				addr = wideValue();
+			}
+			immediate(0x20, 0xFFF & addr);
+		} else {
+			immediate(0x20, wideValueOf(token));
+		}
+	}
+
+	# ---------- tokenizer ----------
+
+	fun tokenize(src: str) = {
+		var token = "".toString();
+		var tokenLine: i64 = -1;
+		var ln: i64 = 1;
+		var index: i64 = 0;
+		let vtab = 11u8 as char;
+		while (index < src.length() and not failed) {
+			var c = src[index];
+			index = index + 1;
+			if (c == '#') {
+				if (token.length() > 0) tokens.push(wordToken(&token, tokenLine));
+				tokenLine = -1;
+				token.clear();
+				while (c != '\n' and index < src.length()) {
+					c = src[index];
+					index = index + 1;
+				}
+				if (c == '\n') ln = ln + 1;
+			} else if (c == '"') {
+				# Octo doesn't clear `token` here, so a word glued to a string is repeated.
+				if (token.length() > 0) tokens.push(wordToken(&token, tokenLine));
+				var s = "".toString();
+				let stringLine = ln;
+				var closed = false;
+				while (not closed and not failed) {
+					if (index >= src.length()) {
+						failAt("Missing a closing \" in a string literal.".toString(), ln);
+					} else {
+						c = src[index];
+						index = index + 1;
+						if (c == '"') {
+							closed = true;
+						} else {
+							if (c == '\n') ln = ln + 1;
+							if (c == '\\') {
+								if (index >= src.length()) {
+									failAt("Missing a closing \" in a string literal.".toString(), ln);
+								} else {
+									let esc = src[index];
+									index = index + 1;
+									if (esc == 't') {
+										c = '\t';
+									} else if (esc == 'n') {
+										c = '\n';
+									} else if (esc == 'r') {
+										c = '\r';
+									} else if (esc == 'v') {
+										c = vtab;
+									} else if (esc == '0') {
+										c = '\0';
+									} else if (esc == '\\') {
+										c = '\\';
+									} else if (esc == '"') {
+										c = '"';
+									} else {
+										failAt(f"Unrecognized escape character '{esc}' in a string literal.", ln);
+									}
+								}
+							}
+							s.append(c);
+						}
+					}
+				}
+				tokens.push(Token(move s, false, 0.0, stringLine));
+				tokenLine = -1;
+			} else if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == vtab) {
+				if (token.length() > 0) tokens.push(wordToken(&token, tokenLine));
+				tokenLine = -1;
+				token.clear();
+				if (c == '\n') ln = ln + 1;
+			} else {
+				if (tokenLine == -1) tokenLine = ln;
+				token.append(c);
+			}
+		}
+		if (token.length() > 0) tokens.push(wordToken(&token, tokenLine));
+		lastLine = ln;
+	}
+
+	# ---------- driver ----------
+
+	fun compile(src: str) = {
+		var k: i64 = 0;
+		let keys = "1 2 3 4 Q W E R A S D F Z X C V";
+		let values = "123C456D789EA0BF";
+		while (k < 16) {
+			var name = "OCTO_KEY_".toString();
+			name.append(keys[k * 2]);
+			constants.push(Sym(move name, hexDigitValue(values[k]) as f64, false));
+			k = k + 1;
+		}
+		aliases.push(Sym("unpack-hi".toString(), 0.0, false));
+		aliases.push(Sym("unpack-lo".toString(), 1.0, false));
+
+		tokenize(src);
+		inst(0, 0);   # reserved jump to main
+		while (not atEnd() and not failed) {
+			var t = take();
+			if (t.isNumber) {
+				if (t.value < -128.0 or t.value > 255.0) {
+					fail(f"Literal value '{t.text}' does not fit in a byte- must be in range [-128,255].");
+				} else {
+					data(toInt32(t.value));
+				}
+			} else {
+				instruction(&t);
+			}
+		}
+		if (failed) return;
+		if (hasmain) {
+			if (findSym(&constants, "main") < 0 and findSym(&dict, "main") < 0) {
+				failAt("This program is missing a 'main' label.".toString(), lastLine);
+				return;
+			}
+			var mainToken = Token("main".toString(), false, 0.0, lastLine);
+			patchJump(0x200, wideValueOf(&mainToken));
+		}
+		if (protos.length() > 0) {
+			failAt(f"Undefined forward reference: {protos.at(0).name}", protos.at(0).line);
+			return;
+		}
+		if (loops.length() > 0) {
+			failAt("This 'loop' does not have a matching 'again'.".toString(), loopLines.at(loopLines.length() - 1));
+			return;
+		}
+		if (branches.length() > 0) {
+			var kind = "begin";
+			if (branchIsElse.at(branchIsElse.length() - 1)) kind = "else";
+			failAt(f"This '{kind}' does not have a matching 'end'.", branchLines.at(branchLines.length() - 1));
+		}
+	}
+
+	# The assembled program (loaded at 0x200), one char per byte.
+	fun bytes() -> String = {
+		var out = "".toString();
+		var k: i64 = 0;
+		while (k < rom.length()) {
+			out.append((romAt(k) as u8) as char);
+			k = k + 1;
+		}
+		return out;
+	}
+}
+
+# ========== PUBLIC API ===========
+
+#{
+# Octo source couldn't be assembled.
+#}
+class OctoError {
+	line: i64;
+	message: String;
+}
+
+#{
+# Assembles Octo `src` into a CHIP-8 program (bytes for 0x200 onwards).
+#}
+fun assembleOcto(src: str) -> Result[String, OctoError] = {
+	var c: OctoCompiler;
+	c.compile(src);
+	if (c.failed) return Err[OctoError](OctoError(c.errorLine, copy c.error));
+	return Ok[String](c.bytes());
+}
+
+fun escapeForString(s: ref String) -> String = {
+	var out = "".toString();
+	var k: i64 = 0;
+	while (k < s.length()) {
+		let c: char = s.at(k);
+		if (c == '"' or c == '\\') out.append('\\');
+		out.append(c);
+		k = k + 1;
+	}
+	return out;
+}
+
+#{
+# Compile-time helper for tests: `expand octo("chip", "...")` stores the assembled
+# program into `chip.mem` from 0x200. A bad program fails the build with
+# `octo_assembly_error("line N: <Octo's message>")`.
+#}
+fun octo(target: str, src: str) -> String = {
+	var c: OctoCompiler;
+	c.compile(src);
+	var out = "{\n".toString();
+	if (c.failed) {
+		var message = f"line {c.errorLine}: {c.error}";
+		out.append("octo_assembly_error(\"");
+		out.append(escapeForString(&message).asSlice());
+		out.append("\");\n");
+	} else {
+		var k: i64 = 0;
+		while (k < c.rom.length()) {
+			out.append(target);
+			out.append(".mem[");
+			out.append((0x200 + k).toString());
+			out.append("] = ");
+			out.append(c.romAt(k).toString());
+			out.append("u8;\n");
+			k = k + 1;
+		}
+	}
+	out.append("}");
+	return out;
+}

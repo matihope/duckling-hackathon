@@ -15,8 +15,10 @@ import result.Ok;
 import result.Err;
 import tui.terminal.TerminalError;
 import tui.render.TooSmall;
+import chip8.octo.assembleOcto;
+import chip8.octo.OctoError;
 
-const USAGE: str = "usage: duckling-hackathon <rom.ch8> [--dump <frames>] | -t [filter]";
+const USAGE: str = "usage: duckling-hackathon <rom.ch8 | program.8o> [--dump <frames>] | -t [filter]";
 
 # Non-negative decimal from `s`, or -1.
 fun parseCount(s: str) -> i64 = {
@@ -45,9 +47,40 @@ fun runRom(rom: ref String, path: str, dumpFrames: i64) -> AppResult = {
     };
 }
 
+fun endsWith(s: str, suffix: str) -> bool = {
+    if (s.length() < suffix.length()) return false;
+    let offset = s.length() - suffix.length();
+    var k: i64 = 0;
+    while (k < suffix.length()) {
+        if (s[offset + k] != suffix[k]) return false;
+        k = k + 1;
+    }
+    return true;
+}
+
+fun asmFailed(path: str, e: ref OctoError) -> AppResult = failed(AsmFailed(path.toString(), e.line, copy e.message));
+
+#{
+# Assembles an Octo source, then runs it.
+#}
+fun runOcto(source: ref String, path: str, dumpFrames: i64) -> AppResult = {
+    return match (assembleOcto(source.asSlice())) {
+        case rom: Ok[String] = runRom(&rom.value, path, dumpFrames);
+        case e: Err[OctoError] = asmFailed(path, &e.error);
+    };
+}
+
+#{
+# Runs a `.ch8` ROM, or a `.8o` Octo source after assembling it.
+#}
+fun runContent(content: ref String, path: str, dumpFrames: i64) -> AppResult = {
+    if (endsWith(path, ".8o")) return runOcto(content, path, dumpFrames);
+    return runRom(content, path, dumpFrames);
+}
+
 fun runFile(path: str, dumpFrames: i64) -> AppResult = {
     return match (read_file(path)) {
-        case content: String = runRom(&content, path, dumpFrames);
+        case content: String = runContent(&content, path, dumpFrames);
         case _ = failed(ReadFailed(path.toString()));
     };
 }
@@ -67,6 +100,7 @@ fun report(error: ref AppError) -> i64 = {
         case e: TerminalError = e.report();
         case e: TooSmall = fail(e.message());
         case e: ref Halted = fail(f"CHIP-8 halted: {e.reason}");
+        case e: ref AsmFailed = fail(f"{e.path}:{e.line}: {e.message}");
     };
 }
 

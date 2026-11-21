@@ -1,0 +1,138 @@
+#{
+# Octo assembler tests: inline programs assembled at compile time, and the
+# Timendus test-suite sources (roms/, if cloned) checked byte for byte against
+# their official .ch8 builds.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.chip8.Chip8;
+import src.chip8.octo.octo;
+import src.chip8.octo.assembleOcto;
+import src.chip8.octo.OctoError;
+import src.result.Ok;
+import src.result.Err;
+import src.result.Result;
+import src.testing.TestCase;
+import src.testing.check;
+import src.testing.checkEq;
+import src.testing.hex;
+import src.utils.read_file;
+
+const SUITE_DIR: str = "roms/chip8-test-suite/bin/";
+
+fun compareBytes(name: str, got: ref String, expected: ref String) = {
+	var k: i64 = 0;
+	var same = got.length() == expected.length();
+	while (same and k < got.length()) {
+		let a: char = got.at(k);
+		let b: char = expected.at(k);
+		same = a == b;
+		k = k + 1;
+	}
+	if (not same) {
+		var first: i64 = 0;
+		var differ = false;
+		while (not differ and first < got.length() and first < expected.length()) {
+			let a: char = got.at(first);
+			let b: char = expected.at(first);
+			differ = a != b;
+			if (not differ) first = first + 1;
+		}
+		check(false, f"{name}: {got.length()} bytes vs {expected.length()} expected, first difference at {hex(0x200 + first)}".asSlice());
+	}
+}
+
+fun checkAssembled(name: str, result: ref Result[String, OctoError], expected: ref String) -> i64 = {
+	return match (result) {
+		case ok: ref Ok[String] = compareAndCount(name, &ok.value, expected);
+		case e: ref Err[OctoError] = reportAsmError(name, &e.error);
+	};
+}
+
+fun compareAndCount(name: str, got: ref String, expected: ref String) -> i64 = {
+	compareBytes(name, got, expected);
+	return 0;
+}
+
+fun reportAsmError(name: str, e: ref OctoError) -> i64 = {
+	check(false, f"{name}: line {e.line}: {e.message}".asSlice());
+	return 0;
+}
+
+fun checkSuiteRom(name: str) = {
+	var source = read_file(f"{SUITE_DIR}{name}.8o".asSlice());
+	var binary = read_file(f"{SUITE_DIR}{name}.ch8".asSlice());
+	if (source.isEmpty() or binary.isEmpty()) {
+		print(f"    (skipped {name}: test suite not in roms/)\n");
+	} else {
+		var result = assembleOcto(source.value().asSlice());
+		var expected = binary.value();
+		checkAssembled(name, &result, &expected);
+	}
+}
+
+fun testSuiteSources() = {
+	checkSuiteRom("1-chip8-logo");
+	checkSuiteRom("2-ibm-logo");
+	checkSuiteRom("3-corax+");
+	checkSuiteRom("4-flags");
+	checkSuiteRom("5-quirks");
+	checkSuiteRom("6-keypad");
+	checkSuiteRom("7-beep");
+	checkSuiteRom("8-scrolling");
+}
+
+fun steps(c: ref Chip8, n: i64) = {
+	var k: i64 = 0;
+	while (k < n) {
+		c.step();
+		k = k + 1;
+	}
+}
+
+fun testInlineOcto() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ": main  v3 := 250  v3 += 10  v4 := 3  loop  v4 -= 1  if v4 != 0 then  again  i := data  load v1  : data  0x2A 0x07");
+	steps(&c, 20);
+	checkEq(c.v[3], 4, "250 + 10 wraps");
+	checkEq(c.v[4], 0, "loop ran down");
+	checkEq(c.v[0], 0x2A, "load v1: v0");
+	checkEq(c.v[1], 7, "load v1: v1");
+}
+
+fun testMacrosAndCalc() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ":const BASE 10  :calc DOUBLE { BASE * 2 + 1 }  :macro set REG VAL { REG := VAL }  :macro count REG { REG := CALLS }  : main  set v3 DOUBLE  count v4  count v5");
+	steps(&c, 3);
+	checkEq(c.v[3], 30, ":calc is right-associative without precedence: 10 * (2 + 1)");
+	checkEq(c.v[4], 0, "first CALLS");
+	checkEq(c.v[5], 1, "second CALLS");
+}
+
+fun testIfBeginElse() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ": main  v0 := 5  if v0 > 3 begin  v1 := 1  else  v1 := 2  end  if v0 < 3 begin  v2 := 1  else  v2 := 2  end  loop again");
+	steps(&c, 20);
+	checkEq(c.v[1], 1, "5 > 3 takes begin branch");
+	checkEq(c.v[2], 2, "5 < 3 takes else branch");
+}
+
+fun testForwardJumpMain() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ": helper  v0 := 9  return  : main  helper  loop again");
+	checkEq(c.mem[0x200], 0x12, "reserved jump to main");
+	steps(&c, 3);
+	checkEq(c.v[0], 9, "called helper");
+}
+
+fun addOctoTests(tests: ref List[TestCase]) = {
+	tests.push(TestCase("octo.inline", testInlineOcto));
+	tests.push(TestCase("octo.macros_calc", testMacrosAndCalc));
+	tests.push(TestCase("octo.if_begin_else", testIfBeginElse));
+	tests.push(TestCase("octo.forward_main", testForwardJumpMain));
+	tests.push(TestCase("octo.suite_sources", testSuiteSources));
+}

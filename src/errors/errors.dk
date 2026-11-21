@@ -24,7 +24,16 @@ class Halted {
 	reason: String;
 }
 
-const AppError = ReadFailed | RomTooBig | TerminalError | TooSmall | Halted;
+#{
+# An Octo (.8o) source didn't assemble.
+#}
+class AsmFailed {
+	path: String;
+	line: i64;
+	message: String;
+}
+
+const AppError = ReadFailed | AsmFailed | RomTooBig | TerminalError | TooSmall | Halted;
 const AppResult = Result[(), AppError];
 
 fun succeeded() -> AppResult = Ok[()](());

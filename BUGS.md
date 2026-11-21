@@ -40,3 +40,11 @@
 18) Nie da się zrobić `move` pola z bindingu w `match`: `move e.error` daje `` `move` can only be applied to an owned local variable.`` Obejście: matchować przez `ref` i bindować `ref Err[E]`.
 19) `()` jako alternatywa w typie wariantu: `fun f() -> () | RomTooBig` daje `Call failed because no matching functions were found.` (testy języka używają `T | ()`, nie sprawdzałem tej kolejności). `Ok[()]` działa.
 20) Kolejny przypadek z 1): `match` z `case _ = 0;` i `case e = foo();` (zwraca i64) daje `All match cases have to be of the same type, but this one is i64 while an earlier one is i32.` Trzeba pisać `0i64`.
+21) Literał zmiennoprzecinkowy bez typu to `f32`: `var term = 1.0;`, a potem `term = term * x` z `x: f64` daje `Type f64 cannot be converted to type f32.` Trzeba pisać `var term: f64 = 1.0;`.
+22) Brak shadowingu nawet między rozłącznymi blokami: `var k` w bloku `if` i późniejsze `var k` w funkcji dają `Variable name is ambiguous, because it has been defined multiple times.`
+23) Nie da się wstawić `{` ani `}` do f-stringa: `f"Expected '\{'"` daje `Escape sequence \{ is not recognised.` Obejście: zwykły string i `append`.
+24) Ewaluacja comp-time (`expand`) nie radzi sobie z:
+    - dzieleniem float przez zero (`0.0 / 0.0` dla NaN): `Compile time evaluation of this function call failed or returned unsupported result.` Obejście: `inf = 1.0e308 * 10.0`, `nan = inf - inf`.
+    - `std.math` (libm przez FFI, np. `math.sqrt`).
+    Błąd nie mówi, która instrukcja zawiodła, trzeba bisectować.
+25) `match (result)` na lokalnej zmiennej z wariantem posiadającym `String` daje `Cannot implicitly copy a value of non-trivially-copyable type`. Trzeba `match (move result)` albo przekazać przez `ref` do funkcji.
