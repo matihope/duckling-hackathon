@@ -6,6 +6,8 @@ import core.builtins.*;
 import core.containers.*;
 import src.tui.isatty;
 import src.tui.STDOUT_FILENO;
+import src.tui.terminal.ESC;
+import src.strings.*;
 
 class TestCase {
 	name: str;
@@ -33,16 +35,7 @@ var USE_COLOR: bool = false;
 #}
 fun paint(code: str, text: str) -> String = {
 	if (not USE_COLOR) return text.toString();
-	let esc = 27u8 as char;
-	var out = "".toString();
-	out.append(esc);
-	out.append('[');
-	out.append(code);
-	out.append('m');
-	out.append(text);
-	out.append(esc);
-	out.append("[0m");
-	return out;
+	return f"{ESC}[{code}m{text}{ESC}[0m";
 }
 
 #{
@@ -50,23 +43,6 @@ fun paint(code: str, text: str) -> String = {
 #}
 fun fail(message: String) = {
 	CURRENT_FAILURES.push(move message);
-}
-
-#{
-# `0x`-prefixed uppercase hex of `v` (no sign handling; negative values print as two's complement).
-#}
-fun hex(v: i64) -> String = {
-	let digits = "0123456789ABCDEF";
-	var out = "".toString();
-	var rest = v as u64;
-	if (rest == 0u64) out.append('0');
-	while (rest != 0u64) {
-		out.prepend(digits[(rest & 15u64) as i64]);
-		rest = rest >> 4u64;
-	}
-	out.prepend('x');
-	out.prepend('0');
-	return out;
 }
 
 #{
@@ -89,37 +65,12 @@ fun checkEq(actual: i64, expected: i64, what: str) = {
 }
 
 #{
-# Whether `a` and `b` hold the same characters (`str == str` isn't supported).
-#}
-fun strEq(a: str, b: str) -> bool = {
-	if (a.length() != b.length()) return false;
-	var i: i64 = 0;
-	while (i < a.length() and a[i] == b[i]) i = i + 1;
-	return i == a.length();
-}
-
-#{
 # Marks the running test as failed when `actual` and `expected` differ.
 #}
 fun checkStr(actual: str, expected: str, what: str) = {
 	if (not strEq(actual, expected)) {
 		fail(f"{what}: got \"{actual}\", expected \"{expected}\"");
 	}
-}
-
-#{
-# Whether `needle` occurs in `haystack`.
-#}
-fun contains(haystack: str, needle: str) -> bool = {
-	var start: i64 = 0;
-	var found = false;
-	while (not found and start + needle.length() <= haystack.length()) {
-		var i: i64 = 0;
-		while (i < needle.length() and haystack[start + i] == needle[i]) i = i + 1;
-		found = i == needle.length();
-		start = start + 1;
-	}
-	return found;
 }
 
 #{

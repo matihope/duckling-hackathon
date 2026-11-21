@@ -16,6 +16,7 @@ import isa.*;
 import isa.instructions.*;
 import platform.*;
 import src.display.Display;
+import src.strings.*;
 
 extern ("C") {
 	fundecl rand() -> i32;
@@ -114,19 +115,8 @@ class RomTooBig {
 	max: i64;
 }
 
-# `0x`-prefixed, zero-padded 4-digit uppercase hex.
-fun hex4(v: i64) -> String = {
-	let digits = "0123456789ABCDEF";
-	var out = "0x".toString();
-	var shift: i64 = 12;
-	while (shift >= 0) {
-		out.append(digits[(v >> shift) & 15]);
-		shift = shift - 4;
-	}
-	return out;
-}
-
-fun hexNibble(c: char) -> u8 = if '0' <= c <= '9' then (c - '0') as u8 else (c - 'A') as u8 + 10u8;
+# Value of hex digit `c` (the font tables only hold valid ones).
+fun hexNibble(c: char) -> u8 = digitValue(c, 16).value() as u8;
 
 # Wraps an address into the 4 KiB memory.
 fun wrapAddr(a: i64) -> i64 = a & (MEMORY_SIZE - 1);
@@ -287,7 +277,7 @@ class Chip8 {
 		status = Halted(move reason);
 	}
 
-	fun here() -> String = hex4((pc - 2u16) as i64);
+	fun here() -> String = hexPadded((pc - 2u16) as i64, 4);
 
 	# False (and halts) when a SUPER-CHIP instruction runs on a CHIP-8 platform.
 	fun requireSuperChip(opcode: str) -> bool = {
@@ -520,7 +510,7 @@ class Chip8 {
 	}
 
 	fun exec(it: Unknown) = {
-		halt(f"unknown opcode {hex4(it.op as i64)} at {here()}");
+		halt(f"unknown opcode {hexPadded(it.op as i64, 4)} at {here()}");
 	}
 }
 

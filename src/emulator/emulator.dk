@@ -102,11 +102,7 @@ fun stopResult(chip: ref Chip8) -> AppResult = match (&chip.status) {
 fun drawStatus(term: ref Terminal, chip: ref Chip8, title: str) = {
 	var out = "".toString();
 	appendMoveTo(&out, 1, 1);
-	out.append(title);
-	out.append("  [");
-	out.append(chip.platform.name);
-	out.append("]");
-	out.append("  |  keys: 1234 qwer asdf zxcv  |  Ctrl-C / Esc: quit");
+	out.append(f"{title}  [{chip.platform.name}]  |  keys: 1234 qwer asdf zxcv  |  Ctrl-C / Esc: quit");
 	term.writeAll(out.asSlice());
 }
 

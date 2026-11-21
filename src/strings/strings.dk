@@ -1,0 +1,129 @@
+#{
+# String helpers shared by the whole project: comparing and searching `str`
+# (`str == str` doesn't compile, BUGS.md 12), parsing numbers and hex output.
+#
+# Everything here also runs at compile time: the ISA generator and the Octo
+# assembler call it from `expand`.
+#}
+import core.builtins.*;
+import core.containers.*;
+
+const HEX_DIGITS: str = "0123456789ABCDEF";
+
+# ========== COMPARING ===========
+
+#{
+# Whether `a` and `b` hold the same characters.
+#}
+fun strEq(a: str, b: str) -> bool = {
+	if (a.length() != b.length()) return false;
+	return matchesAt(a, 0, b);
+}
+
+#{
+# Whether `part` occurs in `s` starting at index `at`.
+#}
+fun matchesAt(s: str, at: i64, part: str) -> bool = {
+	if (at < 0 or at + part.length() > s.length()) return false;
+	var k: i64 = 0;
+	while (k < part.length()) {
+		if (s[at + k] != part[k]) return false;
+		k = k + 1;
+	}
+	return true;
+}
+
+fun startsWith(s: str, prefix: str) -> bool = matchesAt(s, 0, prefix);
+
+fun endsWith(s: str, suffix: str) -> bool = matchesAt(s, s.length() - suffix.length(), suffix);
+
+#{
+# Whether `needle` occurs anywhere in `haystack`.
+#}
+fun contains(haystack: str, needle: str) -> bool = {
+	var at: i64 = 0;
+	while (at + needle.length() <= haystack.length()) {
+		if (matchesAt(haystack, at, needle)) return true;
+		at = at + 1;
+	}
+	return false;
+}
+
+# ========== PARSING ===========
+
+#{
+# Value of digit `c` in `base` (2..16, either letter case), if it is one.
+#}
+fun digitValue(c: char, base: i64) -> ?i64 = {
+	var d: i64 = 99;
+	if ('0' <= c <= '9') d = (c - '0') as i64;
+	if ('a' <= c <= 'f') d = (c - 'a') as i64 + 10;
+	if ('A' <= c <= 'F') d = (c - 'A') as i64 + 10;
+	if (d >= base) return none;
+	return d;
+}
+
+#{
+# Non-negative decimal `s`, if it is one.
+#}
+fun parseDecimal(s: str) -> ?i64 = {
+	if (s.length() == 0) return none;
+	var value: i64 = 0;
+	var k: i64 = 0;
+	while (k < s.length()) {
+		let d = digitValue(s[k], 10);
+		if (d.isEmpty()) return none;
+		value = value * 10 + d.value();
+		k = k + 1;
+	}
+	return value;
+}
+
+#{
+# Splits `s` into the pieces terminated by `\0`.
+#}
+fun splitNul(s: ref String) -> List[String] = {
+	var parts: List[String];
+	var current: String;
+	var k: i64 = 0;
+	while (k < s.length()) {
+		if (s.at(k) == '\0') {
+			parts.push(move current);
+			current = stringReserve(0);
+		} else {
+			current.append(s.at(k));
+		}
+		k = k + 1;
+	}
+	return parts;
+}
+
+# ========== HEX ===========
+
+#{
+# `0x1F2A`: uppercase hex without leading zeros (`0x0` for 0). Negative values
+# print as two's complement.
+#}
+fun hex(v: i64) -> String = {
+	var digits = "".toString();
+	var rest = v as u64;
+	if (rest == 0u64) digits.append('0');
+	while (rest != 0u64) {
+		digits.prepend(HEX_DIGITS[(rest & 15u64) as i64]);
+		rest = rest >> 4u64;
+	}
+	return f"0x{digits}";
+}
+
+#{
+# `0x01F2`: uppercase hex of the low `width` nibbles of `v`, zero-padded.
+#}
+fun hexPadded(v: i64, width: i64) -> String = {
+	var out = "0x".toString();
+	var shift = (width - 1) * 4;
+	while (shift >= 0) {
+		out.append(HEX_DIGITS[(v >> shift) & 15]);
+		shift = shift - 4;
+	}
+	return out;
+}

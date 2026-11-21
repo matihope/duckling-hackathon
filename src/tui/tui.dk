@@ -51,7 +51,7 @@ extern ("C") {
 
 	# ========== errno / stdlib / stdio ===========
 	fundecl __errno_location() -> cptr mut i32;
-	fundecl exit(status: i32) -> ();
+	fundecl exit(status: i32) -> void;
 	fundecl perror(s: cptr char) -> ();
 	fundecl iscntrl(c: i32) -> i32;
 }

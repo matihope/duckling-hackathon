@@ -50,17 +50,7 @@ class TooSmall {
 	#{
 	# `terminal too small: 40x12, need 66x18`
 	#}
-	public fun message() -> String = {
-		var msg = "terminal too small: ".toString();
-		msg.append(cols.toString());
-		msg.append('x');
-		msg.append(rows.toString());
-		msg.append(", need ");
-		msg.append(needCols.toString());
-		msg.append('x');
-		msg.append(needRows.toString());
-		return msg;
-	}
+	public fun message() -> String = f"terminal too small: {cols}x{rows}, need {needCols}x{needRows}";
 }
 
 #{

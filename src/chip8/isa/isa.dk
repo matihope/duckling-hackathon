@@ -11,6 +11,7 @@
 #}
 import core.builtins.*;
 import core.containers.*;
+import src.strings.*;
 
 class Opcode {
 	bits: str;
@@ -78,23 +79,10 @@ class Unknown {
 
 # ========== GENERATORS (compile time) ===========
 
-fun isHexDigit(c: char) -> bool = ('0' <= c <= '9') or ('A' <= c <= 'F');
-fun hexDigitValue(c: char) -> i64 = if '0' <= c
-	<= '9' then (c - '0') as i64 else (c - 'A') as i64 + 10;
-
 #{
 # `0x1234u16`.
 #}
-fun appendU16(out: ref mut String, v: i64) = {
-	let digits = "0123456789ABCDEF";
-	out.append("0x");
-	var shift: i64 = 12;
-	while (shift >= 0) {
-		out.append(digits[(v >> shift) & 15]);
-		shift = shift - 4;
-	}
-	out.append("u16");
-}
+fun u16Literal(v: i64) -> String = f"{hexPadded(v, 4)}u16";
 
 #{
 # Number of trailing `N`s: the width of the immediate in nibbles.
@@ -113,9 +101,9 @@ fun maskAndValue(bits: str) -> (i64, i64) = {
 	var value: i64 = 0;
 	var k: i64 = 0;
 	while (k < 4) {
-		let fixed = isHexDigit(bits[k]);
-		mask = mask * 16 + (if fixed then 15i64 else 0i64);
-		value = value * 16 + (if fixed then hexDigitValue(bits[k]) else 0i64);
+		let digit = digitValue(bits[k], 16); # none for the X, Y and N placeholders
+		mask = mask * 16 + (if digit.nonEmpty() then 15i64 else 0i64);
+		value = value * 16 + digit.valueOr(0);
 		k = k + 1;
 	}
 	return (mask, value);
@@ -128,9 +116,8 @@ fun appendClasses(out: ref mut String, table: ref List[Opcode]) = {
 	var k: i64 = 0;
 	while (k < table.length()) {
 		let bits = table.at(k).bits;
-		out.append("class ");
-		out.append(table.at(k).name);
-		out.append(" {");
+		out.append(f"class {table.at(k).name} ");
+		out.append("{"); # braces can't go in an f-string (BUGS.md 23)
 		if (bits[1] == 'X') out.append(" x: i64;");
 		if (bits[2] == 'Y') out.append(" y: i64;");
 		let width = immediateNibbles(bits);
@@ -149,8 +136,7 @@ fun appendVariant(out: ref mut String, table: ref List[Opcode]) = {
 	out.append("const Instruction = ");
 	var k: i64 = 0;
 	while (k < table.length()) {
-		out.append(table.at(k).name);
-		out.append(" | ");
+		out.append(f"{table.at(k).name} | ");
 		k = k + 1;
 	}
 	out.append("Unknown;\n");
@@ -184,13 +170,9 @@ fun appendDecode(out: ref mut String, table: ref List[Opcode]) = {
 	while (k < table.length()) {
 		let bits = table.at(k).bits;
 		let mv = maskAndValue(bits);
-		out.append("if ((op & ");
-		appendU16(out, mv._1);
-		out.append(") == ");
-		appendU16(out, mv._2);
-		out.append(") return ");
-		out.append(table.at(k).name);
-		out.append("(");
+		let mask = u16Literal(mv._1);
+		let value = u16Literal(mv._2);
+		out.append(f"if ((op & {mask}) == {value}) return {table.at(k).name}(");
 		appendFieldArgs(out, bits);
 		out.append(");\n");
 		k = k + 1;
@@ -223,14 +205,14 @@ fun dispatch(subject: str) -> String = {
 	out.append(") {\n");
 	var k: i64 = 0;
 	while (k < table.length()) {
-		out.append("case it: ");
-		out.append(table.at(k).name);
+		let name = table.at(k).name;
 		if (table.at(k).superChip) {
-			out.append(" = if requireSuperChip(\"");
+			# A string literal can't go inside `{}` of an f-string (BUGS.md 13).
+			out.append(f"case it: {name} = if requireSuperChip(\"");
 			out.append(table.at(k).bits);
 			out.append("\") then exec(it) else ();\n");
 		} else {
-			out.append(" = exec(it);\n");
+			out.append(f"case it: {name} = exec(it);\n");
 		}
 		k = k + 1;
 	}

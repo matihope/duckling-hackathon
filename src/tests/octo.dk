@@ -17,7 +17,7 @@ import src.result.Result;
 import src.testing.TestCase;
 import src.testing.check;
 import src.testing.checkEq;
-import src.testing.hex;
+import src.strings.hex;
 import src.utils.readFile;
 
 const SUITE_DIR: str = "roms/chip8-test-suite/bin/";

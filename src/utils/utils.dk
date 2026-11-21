@@ -1,11 +1,12 @@
 import core.builtins as builtins;
 import core.containers as containers;
+import src.tui.exit;
+import src.strings.splitNul;
 
 extern ("C") {
 	fundecl fopen(path: cptr char, mode: cptr char) -> cptr u8;
 	fundecl fread(buf: cptr u8, size: u64, n: u64, f: cptr u8) -> u64;
 	fundecl fclose(f: cptr u8) -> i32;
-	fundecl exit(exit_code: u32) -> void;
 }
 
 const CHUNK: i64 = 4096; # same as page size
@@ -44,23 +45,6 @@ fun readFile(path: str) -> ?String = {
 	return content;
 }
 
-# Splits `s` into the pieces terminated by `\0`.
-fun splitNul(s: ref String) -> List[String] = {
-	var parts: List[String];
-	var current: String;
-	var i = 0i64;
-	while (i < s.length()) {
-		if (s.at(i) == '\0') {
-			parts.push(move current);
-			current = stringReserve(0i64);
-		} else {
-			current.append(s.at(i));
-		}
-		i = i + 1i64;
-	}
-	return parts;
-}
-
 # Program arguments (argv[0] first), or none when the file can't be opened.
 # @note Linux only.
 fun readCmdline() -> ?List[String] = {
@@ -71,5 +55,5 @@ fun readCmdline() -> ?List[String] = {
 
 fun exitWithError(er: str) -> void = {
 	print(f"Error: {er}\n");
-	exit(1u8);
+	exit(1);
 }

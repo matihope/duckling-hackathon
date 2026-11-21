@@ -17,6 +17,7 @@ import core.containers.*;
 import src.result.Ok;
 import src.result.Err;
 import src.result.Result;
+import src.strings.*;
 
 # ========== JS NUMBER SEMANTICS (no libm) ===========
 
@@ -251,18 +252,6 @@ fun fmtNum(x: f64) -> String = {
 	return x.toString();
 }
 
-fun hexUpper(v: i64) -> String = {
-	let digits = "0123456789ABCDEF";
-	var out = "".toString();
-	var rest = v;
-	if (rest == 0) out.append('0');
-	while (rest > 0) {
-		out.prepend(digits[rest & 15]);
-		rest = rest >> 4;
-	}
-	return out;
-}
-
 # ========== TEXT HELPERS ===========
 
 # `a ++ b ++ c`; for messages with braces, which f-strings can't contain.
@@ -271,26 +260,6 @@ fun quoted(a: str, b: str, c: str) -> String = {
 	out.append(b);
 	out.append(c);
 	return out;
-}
-
-fun sameText(a: str, b: str) -> bool = {
-	if (a.length() != b.length()) return false;
-	var i: i64 = 0;
-	while (i < a.length()) {
-		if (a[i] != b[i]) return false;
-		i = i + 1;
-	}
-	return true;
-}
-
-fun startsWith(a: str, prefix: str) -> bool = {
-	if (a.length() < prefix.length()) return false;
-	var i: i64 = 0;
-	while (i < prefix.length()) {
-		if (a[i] != prefix[i]) return false;
-		i = i + 1;
-	}
-	return true;
 }
 
 # Whether `name` is one of the space-separated words in `list`.
@@ -317,13 +286,6 @@ const RESERVED: str = ":= |= &= ^= -= =- += >>= <<= == != < > <= >= key -key hex
 const UNARY_OPS: str = "- ~ ! sin cos tan exp log abs sqrt sign ceil floor @";
 const BINARY_OPS: str = "- + * / % & | ^ << >> pow min max < > <= >= == !=";
 
-fun hexDigitValue(c: char) -> i64 = {
-	if ('0' <= c <= '9') return (c - '0') as i64;
-	if ('a' <= c <= 'f') return (c - 'a') as i64 + 10;
-	if ('A' <= c <= 'F') return (c - 'A') as i64 + 10;
-	return -1;
-}
-
 # Octo's parseNumber: [+-]0b..., [+-]0x..., [+-]digits; NaN otherwise.
 fun parseOctoNumber(t: str) -> f64 = {
 	var k: i64 = 0;
@@ -343,9 +305,9 @@ fun parseOctoNumber(t: str) -> f64 = {
 	if (k >= t.length()) return nanValue();
 	var value: f64 = 0.0;
 	while (k < t.length()) {
-		let d = hexDigitValue(t[k]);
-		if (d < 0 or d >= base) return nanValue();
-		value = value * (base as f64) + (d as f64);
+		let d = digitValue(t[k], base);
+		if (d.isEmpty()) return nanValue();
+		value = value * (base as f64) + (d.value() as f64);
 		k = k + 1;
 	}
 	if (negative) return -value;
@@ -367,8 +329,8 @@ fun pow10(e: i64) -> f64 = {
 # JS `Number(text)` for a token (no surrounding whitespace in tokens).
 fun jsNumber(t: str) -> f64 = {
 	if (t.length() == 0) return 0.0;
-	if (sameText(t, "Infinity") or sameText(t, "+Infinity")) return infValue();
-	if (sameText(t, "-Infinity")) return -infValue();
+	if (strEq(t, "Infinity") or strEq(t, "+Infinity")) return infValue();
+	if (strEq(t, "-Infinity")) return -infValue();
 	if (t.length() > 2 and t[0] == '0') {
 		var base: i64 = 0;
 		if (t[1] == 'x' or t[1] == 'X') base = 16;
@@ -378,9 +340,9 @@ fun jsNumber(t: str) -> f64 = {
 			var parsed: f64 = 0.0;
 			var p: i64 = 2;
 			while (p < t.length()) {
-				let d = hexDigitValue(t[p]);
-				if (d < 0 or d >= base) return nanValue();
-				parsed = parsed * (base as f64) + (d as f64);
+				let d = digitValue(t[p], base);
+				if (d.isEmpty()) return nanValue();
+				parsed = parsed * (base as f64) + (d.value() as f64);
 				p = p + 1;
 			}
 			return parsed;
@@ -492,7 +454,7 @@ class StringMode {
 fun findSym(list: ref List[Sym], name: str) -> i64 = {
 	var k: i64 = 0;
 	while (k < list.length()) {
-		if (sameText(list.at(k).name.asSlice(), name)) return k;
+		if (strEq(list.at(k).name.asSlice(), name)) return k;
 		k = k + 1;
 	}
 	return -1;
@@ -585,7 +547,7 @@ class OctoCompiler {
 		}
 	}
 
-	fun isWord(t: ref Token, word: str) -> bool = not t.isNumber and sameText(
+	fun isWord(t: ref Token, word: str) -> bool = not t.isNumber and strEq(
 		t.text.asSlice(),
 		word
 	);
@@ -611,7 +573,7 @@ class OctoCompiler {
 		if (t.text.length() != 2) return false;
 		let first: char = t.text.at(0);
 		let second: char = t.text.at(1);
-		return (first == 'v' or first == 'V') and hexDigitValue(second) >= 0;
+		return (first == 'v' or first == 'V') and digitValue(second, 16).nonEmpty();
 	}
 
 	fun peekIsRegister() -> bool = {
@@ -628,7 +590,7 @@ class OctoCompiler {
 		let alias = findSym(&aliases, t.text.asSlice());
 		if (alias >= 0) return aliases.at(alias).value as i64;
 		let second: char = t.text.at(1);
-		return hexDigitValue(second);
+		return digitValue(second, 16).value();
 	}
 
 	fun takeRegister() -> i64 = {
@@ -655,7 +617,7 @@ class OctoCompiler {
 	fun data(a: i64) = {
 		let index = here - 0x200;
 		if (index >= 0 and index < rom.length() and rom.at(index) >= 0) {
-			fail(f"Data overlap. Address 0x{hexUpper(here)} has already been defined.");
+			fail(f"Data overlap. Address {hex(here)} has already been defined.");
 		}
 		setRom(index, a);
 		here = here + 1;
@@ -704,7 +666,7 @@ class OctoCompiler {
 	fun findProto(name: str) -> i64 = {
 		var k: i64 = 0;
 		while (k < protos.length()) {
-			if (sameText(protos.at(k).name.asSlice(), name)) return k;
+			if (strEq(protos.at(k).name.asSlice(), name)) return k;
 			k = k + 1;
 		}
 		return -1;
@@ -930,45 +892,45 @@ class OctoCompiler {
 	}
 
 	fun applyUnary(op: str, x: f64) -> f64 = {
-		if (sameText(op, "-")) return -x;
-		if (sameText(op, "~")) return (-toInt32(x) - 1) as f64;
-		if (sameText(op, "!")) return boolF(x == 0.0 or isNaN(x));
-		if (sameText(op, "sin")) return sinF(x);
-		if (sameText(op, "cos")) return cosF(x);
-		if (sameText(op, "tan")) return divF(sinF(x), cosF(x));
-		if (sameText(op, "exp")) return expF(x);
-		if (sameText(op, "log")) return logF(x);
-		if (sameText(op, "abs")) {
+		if (strEq(op, "-")) return -x;
+		if (strEq(op, "~")) return (-toInt32(x) - 1) as f64;
+		if (strEq(op, "!")) return boolF(x == 0.0 or isNaN(x));
+		if (strEq(op, "sin")) return sinF(x);
+		if (strEq(op, "cos")) return cosF(x);
+		if (strEq(op, "tan")) return divF(sinF(x), cosF(x));
+		if (strEq(op, "exp")) return expF(x);
+		if (strEq(op, "log")) return logF(x);
+		if (strEq(op, "abs")) {
 			if (x < 0.0) return -x;
 			return x;
 		}
-		if (sameText(op, "sqrt")) return sqrtF(x);
-		if (sameText(op, "sign")) return signF(x);
-		if (sameText(op, "ceil")) return ceilF(x);
-		if (sameText(op, "floor")) return floorF(x);
+		if (strEq(op, "sqrt")) return sqrtF(x);
+		if (strEq(op, "sign")) return signF(x);
+		if (strEq(op, "ceil")) return ceilF(x);
+		if (strEq(op, "floor")) return floorF(x);
 		# "@": peek at the ROM built so far
 		return romAt(toInt32(x) - 0x200) as f64;
 	}
 
 	fun applyBinary(op: str, x: f64, y: f64) -> f64 = {
-		if (sameText(op, "-")) return x - y;
-		if (sameText(op, "+")) return x + y;
-		if (sameText(op, "*")) return x * y;
-		if (sameText(op, "/")) return divF(x, y);
-		if (sameText(op, "%")) return fmodF(x, y);
-		if (sameText(op, "&")) return int32F(toInt32(x) & toInt32(y));
-		if (sameText(op, "|")) return int32F(toInt32(x) | toInt32(y));
-		if (sameText(op, "^")) return int32F(toInt32(x) ^ toInt32(y));
-		if (sameText(op, "<<")) return int32F(toInt32(x) << (toInt32(y) & 31));
-		if (sameText(op, ">>")) return shiftRight32(toInt32(x), toInt32(y) & 31) as f64;
-		if (sameText(op, "pow")) return powF(x, y);
-		if (sameText(op, "min")) return minF(x, y);
-		if (sameText(op, "max")) return maxF(x, y);
-		if (sameText(op, "<")) return boolF(x < y);
-		if (sameText(op, ">")) return boolF(x > y);
-		if (sameText(op, "<=")) return boolF(x <= y);
-		if (sameText(op, ">=")) return boolF(x >= y);
-		if (sameText(op, "==")) return boolF(x == y);
+		if (strEq(op, "-")) return x - y;
+		if (strEq(op, "+")) return x + y;
+		if (strEq(op, "*")) return x * y;
+		if (strEq(op, "/")) return divF(x, y);
+		if (strEq(op, "%")) return fmodF(x, y);
+		if (strEq(op, "&")) return int32F(toInt32(x) & toInt32(y));
+		if (strEq(op, "|")) return int32F(toInt32(x) | toInt32(y));
+		if (strEq(op, "^")) return int32F(toInt32(x) ^ toInt32(y));
+		if (strEq(op, "<<")) return int32F(toInt32(x) << (toInt32(y) & 31));
+		if (strEq(op, ">>")) return shiftRight32(toInt32(x), toInt32(y) & 31) as f64;
+		if (strEq(op, "pow")) return powF(x, y);
+		if (strEq(op, "min")) return minF(x, y);
+		if (strEq(op, "max")) return maxF(x, y);
+		if (strEq(op, "<")) return boolF(x < y);
+		if (strEq(op, ">")) return boolF(x > y);
+		if (strEq(op, "<=")) return boolF(x <= y);
+		if (strEq(op, ">=")) return boolF(x >= y);
+		if (strEq(op, "==")) return boolF(x == y);
 		return boolF(x != y);
 	}
 
@@ -1039,52 +1001,52 @@ class OctoCompiler {
 		var op = opToken.text.asSlice();
 		if (opToken.isNumber) op = "?";
 		if (negated) {
-			if (sameText(op, "==")) {
+			if (strEq(op, "==")) {
 				op = "!=";
-			} else if (sameText(op, "!=")) {
+			} else if (strEq(op, "!=")) {
 				op = "==";
-			} else if (sameText(op, "key")) {
+			} else if (strEq(op, "key")) {
 				op = "-key";
-			} else if (sameText(op, "-key")) {
+			} else if (strEq(op, "-key")) {
 				op = "key";
-			} else if (sameText(op, "<")) {
+			} else if (strEq(op, "<")) {
 				op = ">=";
-			} else if (sameText(op, ">")) {
+			} else if (strEq(op, ">")) {
 				op = "<=";
-			} else if (sameText(op, ">=")) {
+			} else if (strEq(op, ">=")) {
 				op = "<";
-			} else if (sameText(op, "<=")) {
+			} else if (strEq(op, "<=")) {
 				op = ">";
 			}
 		}
-		if (sameText(op, "==")) {
+		if (strEq(op, "==")) {
 			if (peekIsRegister()) {
 				inst(0x90 | r, takeRegister() << 4);
 			} else {
 				inst(0x40 | r, shortValue());
 			}
-		} else if (sameText(op, "!=")) {
+		} else if (strEq(op, "!=")) {
 			if (peekIsRegister()) {
 				inst(0x50 | r, takeRegister() << 4);
 			} else {
 				inst(0x30 | r, shortValue());
 			}
-		} else if (sameText(op, "key")) {
+		} else if (strEq(op, "key")) {
 			inst(0xE0 | r, 0xA1);
-		} else if (sameText(op, "-key")) {
+		} else if (strEq(op, "-key")) {
 			inst(0xE0 | r, 0x9E);
-		} else if (sameText(op, ">") or sameText(op, "<") or sameText(op, ">=") or sameText(op, "<=")) {
+		} else if (strEq(op, ">") or strEq(op, "<") or strEq(op, ">=") or strEq(op, "<=")) {
 			if (peekIsRegister()) {
 				fourop(0x8, 0xF, takeRegister(), 0x0);
 			} else {
 				inst(0x6F, shortValue());
 			}
-			if (sameText(op, ">") or sameText(op, "<=")) {
+			if (strEq(op, ">") or strEq(op, "<=")) {
 				fourop(0x8, 0xF, r, 0x5); # vf -= vx
 			} else {
 				fourop(0x8, 0xF, r, 0x7); # vf =- vx
 			}
-			if (sameText(op, ">") or sameText(op, "<")) {
+			if (strEq(op, ">") or strEq(op, "<")) {
 				inst(0x4F, 0); # if vf != 0 then
 			} else {
 				inst(0x3F, 0); # if vf == 0 then
@@ -1180,7 +1142,7 @@ class OctoCompiler {
 		var label = identifier("label");
 		if (failed) return;
 		let name = label.text.asSlice();
-		if ((target == 0x202 or target == 0x200) and sameText(name, "main")) {
+		if ((target == 0x202 or target == 0x200) and strEq(name, "main")) {
 			hasmain = false;
 			here = 0x200;
 			if (rom.length() > 0) rom.at(0) = -1;
@@ -1216,7 +1178,7 @@ class OctoCompiler {
 					setRom(addr - 0x200, (target >> 8) & 0xFF);
 					setRom(addr - 0x1FF, target & 0xFF);
 				} else if ((target & 0xFFF) != target) {
-					fail(f"Value 0x{hexUpper(target)} for label '{label.text}' does not fit in 12 bits.");
+					fail(f"Value {hex(target)} for label '{label.text}' does not fit in 12 bits.");
 				} else if (isUnpack) {
 					setRom(addr - 0x1FF, (romAt(addr - 0x1FF) & 0xF0) | ((target >> 8) & 0xF));
 					setRom(addr - 0x1FD, target & 0xFF);
@@ -1239,7 +1201,7 @@ class OctoCompiler {
 	fun findMacro(name: str) -> i64 = {
 		var k: i64 = 0;
 		while (k < macros.length()) {
-			if (sameText(macros.at(k).name.asSlice(), name)) return k;
+			if (strEq(macros.at(k).name.asSlice(), name)) return k;
 			k = k + 1;
 		}
 		return -1;
@@ -1248,7 +1210,7 @@ class OctoCompiler {
 	fun findMode(name: str) -> i64 = {
 		var k: i64 = 0;
 		while (k < modes.length()) {
-			if (sameText(modes.at(k).name.asSlice(), name)) return k;
+			if (strEq(modes.at(k).name.asSlice(), name)) return k;
 			k = k + 1;
 		}
 		return -1;
@@ -1279,13 +1241,13 @@ class OctoCompiler {
 			if (not chunk.isNumber) {
 				var b = macros.at(m).args.length() - 1;
 				while (not bound and b >= 0) {
-					if (sameText(macros.at(m).args.at(b).asSlice(), chunk.text.asSlice())) {
+					if (strEq(macros.at(m).args.at(b).asSlice(), chunk.text.asSlice())) {
 						expansion.push(copy args.at(b));
 						bound = true;
 					}
 					b = b - 1;
 				}
-				if (not bound and sameText(chunk.text.asSlice(), "CALLS")) {
+				if (not bound and strEq(chunk.text.asSlice(), "CALLS")) {
 					expansion.push(numberToken(calls as f64, chunk.line));
 					bound = true;
 				}
@@ -1400,11 +1362,11 @@ class OctoCompiler {
 	fun instruction(token: ref Token) = {
 		let w = token.text.asSlice();
 		let n = token.isNumber;
-		if (not n and sameText(w, ":")) {
+		if (not n and strEq(w, ":")) {
 			resolveLabel(0);
-		} else if (not n and sameText(w, ":next")) {
+		} else if (not n and strEq(w, ":next")) {
 			resolveLabel(1);
-		} else if (not n and sameText(w, ":unpack")) {
+		} else if (not n and strEq(w, ":unpack")) {
 			var a: i64 = 0;
 			if (peekIs("long")) {
 				take();
@@ -1415,9 +1377,9 @@ class OctoCompiler {
 			}
 			inst(0x60 | (aliases.at(findSym(&aliases, "unpack-hi")).value as i64), (a >> 8) & 0xFF);
 			inst(0x60 | (aliases.at(findSym(&aliases, "unpack-lo")).value as i64), a & 0xFF);
-		} else if (not n and sameText(w, ":breakpoint")) {
+		} else if (not n and strEq(w, ":breakpoint")) {
 			stringToken();
-		} else if (not n and sameText(w, ":monitor")) {
+		} else if (not n and strEq(w, ":monitor")) {
 			if (peekIsRegister()) {
 				takeRegister();
 				skipFormatOr(false);
@@ -1425,9 +1387,9 @@ class OctoCompiler {
 				veryWideValue(true, false);
 				skipFormatOr(true);
 			}
-		} else if (not n and sameText(w, ":proto")) {
+		} else if (not n and strEq(w, ":proto")) {
 			take();
-		} else if (not n and sameText(w, ":alias")) {
+		} else if (not n and strEq(w, ":alias")) {
 			var name = identifier("alias");
 			if (failed) return;
 			if (findSym(&dict, name.text.asSlice()) >= 0) {
@@ -1445,7 +1407,7 @@ class OctoCompiler {
 				return;
 			}
 			setSym(&aliases, name.text.asSlice(), value as f64, false);
-		} else if (not n and sameText(w, ":const")) {
+		} else if (not n and strEq(w, ":const")) {
 			var name = identifier("constant");
 			if (failed) return;
 			if (findSym(&constants, name.text.asSlice()) >= 0) {
@@ -1454,7 +1416,7 @@ class OctoCompiler {
 			}
 			let value = constantValue();
 			setSym(&constants, name.text.asSlice(), value, false);
-		} else if (not n and sameText(w, ":macro")) {
+		} else if (not n and strEq(w, ":macro")) {
 			var name = identifier("macro");
 			if (failed) return;
 			if (findMacro(name.text.asSlice()) >= 0) {
@@ -1472,11 +1434,11 @@ class OctoCompiler {
 			macros.push(move m);
 		} else if (not n and findMacro(w) >= 0) {
 			expandMacro(findMacro(w));
-		} else if (not n and sameText(w, ":stringmode")) {
+		} else if (not n and strEq(w, ":stringmode")) {
 			defineStringMode();
 		} else if (not n and findMode(w) >= 0) {
 			expandStringMode(findMode(w));
-		} else if (not n and sameText(w, ":calc")) {
+		} else if (not n and strEq(w, ":calc")) {
 			var name = identifier("calculated constant");
 			if (failed) return;
 			let c = findSym(&constants, name.text.asSlice());
@@ -1486,13 +1448,13 @@ class OctoCompiler {
 			}
 			let value = parseCalculated(name.text.asSlice());
 			setSym(&constants, name.text.asSlice(), value, true);
-		} else if (not n and sameText(w, ":byte")) {
+		} else if (not n and strEq(w, ":byte")) {
 			if (peekIs("{")) {
 				data(toInt32(parseCalculated("ANONYMOUS")));
 			} else {
 				data(shortValue());
 			}
-		} else if (not n and sameText(w, ":pointer")) {
+		} else if (not n and strEq(w, ":pointer")) {
 			var addr: i64 = 0;
 			if (peekIs("{")) {
 				addr = toInt32(parseCalculated("ANONYMOUS"));
@@ -1500,7 +1462,7 @@ class OctoCompiler {
 				addr = veryWideValue(false, true);
 			}
 			inst(shiftRight32(addr, 8), addr);
-		} else if (not n and sameText(w, ":org")) {
+		} else if (not n and strEq(w, ":org")) {
 			var addr: f64 = 0.0;
 			if (peekIs("{")) {
 				addr = parseCalculated("ANONYMOUS");
@@ -1508,7 +1470,7 @@ class OctoCompiler {
 				addr = constantValue();
 			}
 			here = 0xFFFF & toInt32(addr);
-		} else if (not n and sameText(w, ":assert")) {
+		} else if (not n and strEq(w, ":assert")) {
 			var message = "".toString();
 			var hasMessage = false;
 			if (not peekIs("{")) {
@@ -1526,15 +1488,15 @@ class OctoCompiler {
 					fail("Assertion failed.".toString());
 				}
 			}
-		} else if (not n and (sameText(w, ";") or sameText(w, "return"))) {
+		} else if (not n and (strEq(w, ";") or strEq(w, "return"))) {
 			inst(0x00, 0xEE);
-		} else if (not n and sameText(w, "clear")) {
+		} else if (not n and strEq(w, "clear")) {
 			inst(0x00, 0xE0);
-		} else if (not n and sameText(w, "bcd")) {
+		} else if (not n and strEq(w, "bcd")) {
 			inst(0xF0 | takeRegister(), 0x33);
-		} else if (not n and (sameText(w, "save") or sameText(w, "load"))) {
+		} else if (not n and (strEq(w, "save") or strEq(w, "load"))) {
 			let r = takeRegister();
-			let isSave = sameText(w, "save");
+			let isSave = strEq(w, "save");
 			if (not atEnd() and peekIs("-")) {
 				take();
 				var low = 0x03;
@@ -1545,16 +1507,16 @@ class OctoCompiler {
 				if (isSave) low = 0x55;
 				inst(0xF0 | r, low);
 			}
-		} else if (not n and sameText(w, "delay")) {
+		} else if (not n and strEq(w, "delay")) {
 			expectWord(":=");
 			inst(0xF0 | takeRegister(), 0x15);
-		} else if (not n and sameText(w, "buzzer")) {
+		} else if (not n and strEq(w, "buzzer")) {
 			expectWord(":=");
 			inst(0xF0 | takeRegister(), 0x18);
-		} else if (not n and sameText(w, "pitch")) {
+		} else if (not n and strEq(w, "pitch")) {
 			expectWord(":=");
 			inst(0xF0 | takeRegister(), 0x3A);
-		} else if (not n and sameText(w, "if")) {
+		} else if (not n and strEq(w, "if")) {
 			var control = controlToken();
 			if (failed) return;
 			if (isWord(&control, "then")) {
@@ -1570,7 +1532,7 @@ class OctoCompiler {
 			} else {
 				failAt("Expected 'then' or 'begin'.".toString(), control.line);
 			}
-		} else if (not n and sameText(w, "else")) {
+		} else if (not n and strEq(w, "else")) {
 			if (branches.length() < 1) {
 				fail("This 'else' does not have a matching 'begin'.".toString());
 				return;
@@ -1582,7 +1544,7 @@ class OctoCompiler {
 			branchLines.push(line);
 			branchIsElse.push(true);
 			inst(0x00, 0x00);
-		} else if (not n and sameText(w, "end")) {
+		} else if (not n and strEq(w, "end")) {
 			if (branches.length() < 1) {
 				fail("This 'end' does not have a matching 'begin'.".toString());
 				return;
@@ -1590,22 +1552,22 @@ class OctoCompiler {
 			branchLines.pop();
 			branchIsElse.pop();
 			patchJump(branches.pop(), here);
-		} else if (not n and sameText(w, "jump0")) {
+		} else if (not n and strEq(w, "jump0")) {
 			immediate(0xB0, wideValue());
-		} else if (not n and sameText(w, "jump")) {
+		} else if (not n and strEq(w, "jump")) {
 			immediate(0x10, wideValue());
-		} else if (not n and sameText(w, "native")) {
+		} else if (not n and strEq(w, "native")) {
 			immediate(0x00, wideValue());
-		} else if (not n and sameText(w, "sprite")) {
+		} else if (not n and strEq(w, "sprite")) {
 			let r1 = takeRegister();
 			let r2 = takeRegister();
 			let size = tinyValue();
 			inst(0xD0 | r1, (r2 << 4) | size);
-		} else if (not n and sameText(w, "loop")) {
+		} else if (not n and strEq(w, "loop")) {
 			loops.push(here);
 			loopLines.push(line);
 			whiles.push(-1);
-		} else if (not n and sameText(w, "while")) {
+		} else if (not n and strEq(w, "while")) {
 			if (loops.length() < 1) {
 				fail("This 'while' is not within a loop.".toString());
 				return;
@@ -1613,7 +1575,7 @@ class OctoCompiler {
 			conditional(true);
 			whiles.push(here);
 			immediate(0x10, 0);
-		} else if (not n and sameText(w, "again")) {
+		} else if (not n and strEq(w, "again")) {
 			if (loops.length() < 1) {
 				fail("This 'again' does not have a matching 'loop'.".toString());
 				return;
@@ -1624,39 +1586,39 @@ class OctoCompiler {
 				patchJump(whiles.pop(), here);
 			}
 			if (whiles.length() > 0) whiles.pop();
-		} else if (not n and sameText(w, "plane")) {
+		} else if (not n and strEq(w, "plane")) {
 			let plane = tinyValue();
 			if (plane > 3) {
 				fail(f"The plane bitmask must be [0,3], was {plane}.");
 				return;
 			}
 			inst(0xF0 | plane, 0x01);
-		} else if (not n and sameText(w, "audio")) {
+		} else if (not n and strEq(w, "audio")) {
 			inst(0xF0, 0x02);
-		} else if (not n and sameText(w, "scroll-down")) {
+		} else if (not n and strEq(w, "scroll-down")) {
 			inst(0x00, 0xC0 | tinyValue());
-		} else if (not n and sameText(w, "scroll-up")) {
+		} else if (not n and strEq(w, "scroll-up")) {
 			inst(0x00, 0xD0 | tinyValue());
-		} else if (not n and sameText(w, "scroll-right")) {
+		} else if (not n and strEq(w, "scroll-right")) {
 			inst(0x00, 0xFB);
-		} else if (not n and sameText(w, "scroll-left")) {
+		} else if (not n and strEq(w, "scroll-left")) {
 			inst(0x00, 0xFC);
-		} else if (not n and sameText(w, "exit")) {
+		} else if (not n and strEq(w, "exit")) {
 			inst(0x00, 0xFD);
-		} else if (not n and sameText(w, "lores")) {
+		} else if (not n and strEq(w, "lores")) {
 			inst(0x00, 0xFE);
-		} else if (not n and sameText(w, "hires")) {
+		} else if (not n and strEq(w, "hires")) {
 			inst(0x00, 0xFF);
-		} else if (not n and sameText(w, "saveflags")) {
+		} else if (not n and strEq(w, "saveflags")) {
 			inst(0xF0 | takeRegister(), 0x75);
-		} else if (not n and sameText(w, "loadflags")) {
+		} else if (not n and strEq(w, "loadflags")) {
 			inst(0xF0 | takeRegister(), 0x85);
-		} else if (not n and sameText(w, "i")) {
+		} else if (not n and strEq(w, "i")) {
 			var op = take();
 			iassign(&op);
 		} else if (isRegisterToken(token)) {
 			vassign(registerOf(token));
-		} else if (not n and sameText(w, ":call")) {
+		} else if (not n and strEq(w, ":call")) {
 			var addr: i64 = 0;
 			if (peekIs("{")) {
 				addr = toInt32(parseCalculated("ANONYMOUS"));
@@ -1765,7 +1727,7 @@ class OctoCompiler {
 		while (k < 16) {
 			var name = "OCTO_KEY_".toString();
 			name.append(keys[k * 2]);
-			constants.push(Sym(move name, hexDigitValue(values[k]) as f64, false));
+			constants.push(Sym(move name, digitValue(values[k], 16).value() as f64, false));
 			k = k + 1;
 		}
 		aliases.push(Sym("unpack-hi".toString(), 0.0, false));

@@ -4,7 +4,7 @@ import utils.readCmdline;
 import utils.readFile;
 import utils.exitWithError;
 import testing.runTests;
-import testing.strEq;
+import strings.*;
 import tests.allTests;
 import chip8.Chip8;
 import chip8.newChip8;
@@ -52,21 +52,6 @@ class RunFile {
 
 const Command = RunTests | RunFile;
 
-#{
-# Non-negative decimal `s`, if it is one.
-#}
-fun parseCount(s: str) -> ?i64 = {
-	if (s.length() == 0) return none;
-	var value: i64 = 0;
-	var k: i64 = 0;
-	while (k < s.length()) {
-		if (s[k] < '0' or s[k] > '9') return none;
-		value = value * 10 + (s[k] - '0') as i64;
-		k = k + 1;
-	}
-	return value;
-}
-
 fun parseOptions(args: ref mut List[String]) -> ?Options = {
 	var opts = Options(superChip(), none);
 	var k: i64 = 2;
@@ -78,7 +63,7 @@ fun parseOptions(args: ref mut List[String]) -> ?Options = {
 			opts.platform = superChip();
 		} else if (strEq(arg, "--dump") and k + 1 < args.length()) {
 			k = k + 1;
-			opts.dumpFrames = parseCount(args.at(k).asSlice());
+			opts.dumpFrames = parseDecimal(args.at(k).asSlice());
 			if (opts.dumpFrames.isEmpty()) return none;
 		} else {
 			return none;
@@ -117,17 +102,6 @@ fun runRom(rom: ref String, path: str, opts: Options) -> AppResult = {
 		case _: Ok[()] = start(&chip, path, opts);
 		case e: Err[RomTooBig] = failed(e.error);
 	};
-}
-
-fun endsWith(s: str, suffix: str) -> bool = {
-	if (s.length() < suffix.length()) return false;
-	let offset = s.length() - suffix.length();
-	var k: i64 = 0;
-	while (k < suffix.length()) {
-		if (s[offset + k] != suffix[k]) return false;
-		k = k + 1;
-	}
-	return true;
 }
 
 fun asmFailed(path: str, e: ref OctoError) -> AppResult = failed(AsmFailed(path.toString(), e.line, copy e.message));

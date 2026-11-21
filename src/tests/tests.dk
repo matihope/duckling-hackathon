@@ -7,9 +7,7 @@ import src.testing.TestCase;
 import src.testing.check;
 import src.testing.checkEq;
 import src.testing.checkStr;
-import src.testing.contains;
-import src.testing.hex;
-import src.utils.splitNul;
+import src.strings.*;
 import cpu.addCpuTests;
 import octo.addOctoTests;
 import schip.addSuperChipTests;
@@ -45,12 +43,44 @@ fun testSplitNul() = {
 	checkStr(parts.at(1).asSlice(), "cd", "second part");
 }
 
+fun testHexPadded() = {
+	checkStr(hexPadded(0x2A, 4).asSlice(), "0x002A", "padded to 4");
+	checkStr(hexPadded(0x12345, 4).asSlice(), "0x2345", "only the low 4 nibbles");
+}
+
+fun testDigitValue() = {
+	checkEq(digitValue('7', 10).valueOr(-1), 7, "decimal digit");
+	checkEq(digitValue('f', 16).valueOr(-1), 15, "lowercase hex");
+	checkEq(digitValue('B', 16).valueOr(-1), 11, "uppercase hex");
+	check(digitValue('8', 8).isEmpty(), "8 isn't an octal digit");
+	check(digitValue('X', 16).isEmpty(), "not a digit");
+}
+
+fun testParseDecimal() = {
+	checkEq(parseDecimal("1234").valueOr(-1), 1234, "number");
+	check(parseDecimal("").isEmpty(), "empty");
+	check(parseDecimal("12a").isEmpty(), "trailing letter");
+	check(parseDecimal("-3").isEmpty(), "no sign");
+}
+
+fun testAffixes() = {
+	check(strEq("abc", "abc"), "equal");
+	check(not strEq("abc", "abd"), "differ");
+	check(startsWith("OCTO_x", "OCTO_"), "prefix");
+	check(endsWith("game.8o", ".8o"), "suffix");
+	check(not endsWith("o", ".8o"), "suffix longer than the string");
+}
+
 fun allTests() -> List[TestCase] = {
 	var tests: List[TestCase];
 	tests.push(TestCase("lang.u8_wraps", testU8Wraps));
-	tests.push(TestCase("testing.hex", testHex));
-	tests.push(TestCase("testing.contains", testContains));
-	tests.push(TestCase("utils.split_nul", testSplitNul));
+	tests.push(TestCase("strings.hex", testHex));
+	tests.push(TestCase("strings.hex_padded", testHexPadded));
+	tests.push(TestCase("strings.contains", testContains));
+	tests.push(TestCase("strings.affixes", testAffixes));
+	tests.push(TestCase("strings.digit_value", testDigitValue));
+	tests.push(TestCase("strings.parse_decimal", testParseDecimal));
+	tests.push(TestCase("strings.split_nul", testSplitNul));
 	addCpuTests(&tests);
 	addOctoTests(&tests);
 	addSuperChipTests(&tests);
