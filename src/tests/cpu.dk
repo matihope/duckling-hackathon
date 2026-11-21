@@ -122,7 +122,9 @@ fun testDrawCollisionAndDisplayWait() = {
 	check(not c.pixel(1, 1), "font 0 hole");
 	checkEq(c.v[0xF], 0, "no collision");
 	checkEq(c.pc, 0x204, "display wait blocks further steps");
+	check(c.waitingForFrame(), "waiting for the next frame");
 	c.tickTimers();
+	check(not c.waitingForFrame(), "the frame tick ends the wait");
 	c.run(1);
 	check(not c.pixel(0, 0), "second draw erased");
 	checkEq(c.v[0xF], 1, "collision");
@@ -153,15 +155,18 @@ fun testTimers() = {
 fun testWaitKeyNeedsRelease() = {
 	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := key");
-	c.run(1);
-	checkEq(c.pc, 0x200, "waits with no key");
+	c.run(3);
+	check(c.waitingForKey(), "waits with no key");
+	checkEq(c.pc, 0x202, "pc already past FX0A");
 	c.setKey(5, true);
-	c.run(1);
-	checkEq(c.pc, 0x200, "still waits while held");
+	c.run(3);
+	check(c.waitingForKey(), "still waits while held");
+	checkEq(c.v[0], 0, "nothing stored yet");
 	c.setKey(5, false);
 	c.run(1);
-	checkEq(c.pc, 0x202, "continues on release");
+	check(not c.waitingForKey(), "continues on release");
 	checkEq(c.v[0], 5, "key stored");
+	checkEq(c.pc, 0x202, "next step runs the next instruction");
 }
 
 fun testSkipKey() = {
@@ -177,7 +182,7 @@ fun testUnknownOpcodeHalts() = {
 	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  0x01 0x23");
 	c.run(2);
-	check(not c.running(), "halted");
+	check(c.stopped(), "halted");
 	checkEq(c.pc, 0x202, "no further steps");
 }
 

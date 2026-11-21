@@ -70,7 +70,27 @@ var BIG_FONT: str[16] = [
 ];
 
 # ========== STATUS ===========
+# What the machine does on the next `step()`. Every wait is a state of its own,
+# so nothing is re-executed and no flags have to be kept in sync.
+
+#{
+# Executes the instruction at `pc`.
+#}
 class Running {}
+
+#{
+# DXYN ran on a platform with display wait: nothing runs until the next frame.
+#}
+class WaitingForFrame {}
+
+#{
+# FX0A ran: waits for a key to be pressed and released (COSMAC VIP behaviour),
+# then stores it in V`reg`. `pc` already points past FX0A.
+#}
+class WaitingForKey {
+	reg: i64;
+	held: ?i64; # the key seen pressed, waiting for its release
+}
 
 #{
 # Stopped on an instruction it can't run.
@@ -84,7 +104,7 @@ class Halted {
 #}
 class Exited {}
 
-const Status = Running | Halted | Exited;
+const Status = Running | WaitingForFrame | WaitingForKey | Halted | Exited;
 
 #{
 # The ROM doesn't fit in memory above 0x200.
@@ -126,8 +146,6 @@ class Chip8 {
 	# `u8` (0 or 1), not `bool`: a `bool[N]` field breaks the class layout in duckc
 	# (BUGS.md 32). Written through `setKey()`.
 	keys: u8[16]; # 1 while held; set by the frontend
-	waitingForFrame: bool = false; # DXYN ran this frame (display wait quirk)
-	heldKey: ?i64 = none; # FX0A: key seen pressed, waiting for its release
 	status: Status = Running();
 	flags: u8[16]; # SUPER-CHIP FX75/FX85 registers
 
@@ -145,20 +163,54 @@ class Chip8 {
 		return Ok[()](());
 	}
 
-	fun running() -> bool = match (&status) {
-		case _: ref Running = true;
+	#{
+	# Halted or exited: nothing will run any more.
+	#}
+	fun stopped() -> bool = match (&status) {
+		case _: ref Halted = true;
+		case _: ref Exited = true;
+		case _ = false;
+	};
+
+	fun waitingForFrame() -> bool = match (&status) {
+		case _: ref WaitingForFrame = true;
+		case _ = false;
+	};
+
+	fun waitingForKey() -> bool = match (&status) {
+		case _: ref WaitingForKey = true;
 		case _ = false;
 	};
 
 	#{
-	# Fetches, decodes and executes one instruction. Does nothing once stopped or
-	# while waiting for the next frame after a draw.
+	# One machine step: executes an instruction, or advances a key wait.
+	# Does nothing while waiting for the next frame or once stopped.
 	#}
-	fun step() = {
-		if (not running() or waitingForFrame) return;
+	fun step() = match (&status) {
+		case _: ref Running = execute(decode(fetch()));
+		case w: ref WaitingForKey = pollKey(w.reg, w.held);
+		case _ = ();
+	};
+
+	#{
+	# The opcode at `pc`; moves `pc` past it.
+	#}
+	fun fetch() -> u16 = {
 		let op = ((mem[pc as i64] as u16) << 8u16) | (mem[wrapAddr(pc as i64 + 1)] as u16);
 		pc = pc + 2u16;
-		execute(decode(op));
+		return op;
+	}
+
+	#{
+	# FX0A in progress: remembers the first pressed key, finishes once it's released.
+	#}
+	fun pollKey(reg: i64, held: ?i64) = {
+		if (held.isEmpty()) {
+			status = WaitingForKey(reg, pressedKey());
+		} else if (keys[held.value()] == 0u8) {
+			v[reg] = held.value() as u8;
+			status = Running();
+		}
 	}
 
 	fun run(cycles: i64) = {
@@ -182,7 +234,7 @@ class Chip8 {
 	fun tickTimers() = {
 		if (dt > 0u8) dt = dt - 1u8;
 		if (st > 0u8) st = st - 1u8;
-		waitingForFrame = false;
+		if (waitingForFrame()) status = Running();
 	}
 
 	#{
@@ -379,7 +431,7 @@ class Chip8 {
 		}
 		v[0xF] = collision;
 		display.dirty = true; # even a sprite with no pixels set counts as a draw
-		waitingForFrame = platform.displayWait;
+		if (platform.displayWait) status = WaitingForFrame();
 	}
 
 	fun exec(it: SkipKey) = skipIf(keys[(v[it.x] & 0xFu8) as i64] != 0u8);
@@ -389,17 +441,9 @@ class Chip8 {
 		v[it.x] = dt;
 	}
 
-	# Waits for a key to be pressed and then released (COSMAC VIP behaviour).
+	# The wait itself happens in `pollKey`, on the following steps.
 	fun exec(it: WaitKey) = {
-		if (heldKey.isEmpty()) {
-			heldKey = pressedKey();
-			pc = pc - 2u16;
-		} else if (keys[heldKey.value()] != 0u8) {
-			pc = pc - 2u16;
-		} else {
-			v[it.x] = heldKey.value() as u8;
-			heldKey = none;
-		}
+		status = WaitingForKey(it.x, pressedKey());
 	}
 
 	fun exec(it: SetDelay) = {

@@ -130,7 +130,7 @@ fun testRejectedInChip8Mode() = {
 	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  hires");
 	c.run(1);
-	check(not c.running(), "halted");
+	check(c.stopped(), "halted");
 	check(not c.display.hires, "stayed in lores");
 }
 

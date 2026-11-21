@@ -157,7 +157,7 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) ->
 	let bel = 7u8 as char;
 
 	var deadline = nowNs();
-	while (not keypad.quit and chip.running()) {
+	while (not keypad.quit and not chip.stopped()) {
 		if (chip.width() != screen.placedWidth and not screen.fit(term, chip, title, size)) return failed(screen.small);
 
 		let now = nowNs();
@@ -211,7 +211,7 @@ fun runInteractive(chip: ref Chip8, title: str) -> AppResult = {
 #}
 fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
 	var f: i64 = 0;
-	while (f < frames and chip.running()) {
+	while (f < frames and not chip.stopped()) {
 		chip.runFrame();
 		f = f + 1;
 	}
