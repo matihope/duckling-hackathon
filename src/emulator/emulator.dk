@@ -13,6 +13,36 @@ import src.errors.*;
 # ========== TIMING ===========
 const FRAME_NS: i64 = 16666667; # 60 Hz
 const CYCLES_PER_FRAME: i64 = 11; # ~660 instructions per second
+const SCHIP_CYCLES_PER_FRAME: i64 = 30; # SUPER-CHIP games expect a faster machine
+
+fun cyclesPerFrame(chip: ref Chip8)
+	-> i64 = if chip.superChip then SCHIP_CYCLES_PER_FRAME else CYCLES_PER_FRAME;
+
+#{
+# Size of the drawn screen: SUPER-CHIP always shows 128x64 (lores pixels as 2x2),
+# so the frame doesn't change size when a program switches resolution.
+#}
+fun viewWidth(chip: ref Chip8) -> i64 = if chip.superChip then 128i64 else 64i64;
+fun viewHeight(chip: ref Chip8) -> i64 = if chip.superChip then 64i64 else 32i64;
+
+#{
+# Copies `chip`'s screen into `view`, scaled up to the view size.
+#}
+fun fillView(chip: ref Chip8, view: ref Framebuffer) = {
+	let vw = viewWidth(chip);
+	let vh = viewHeight(chip);
+	let sx = vw / chip.width();
+	let sy = vh / chip.height();
+	var y: i64 = 0;
+	while (y < vh) {
+		var x: i64 = 0;
+		while (x < vw) {
+			view[y * vw + x] = chip.pixel(x / sx, y / sy);
+			x = x + 1;
+		}
+		y = y + 1;
+	}
+}
 # Terminals report key presses but not releases, so a key counts as held
 # for this long after its last byte (auto-repeat keeps refreshing it).
 const KEY_HOLD_NS: i64 = 300000000;
@@ -99,10 +129,11 @@ fun haltResult(chip: ref Chip8) -> AppResult = {
 
 # ========== TERMINAL RUN ===========
 
-fun drawStatus(term: ref Terminal, title: str) = {
+fun drawStatus(term: ref Terminal, chip: ref Chip8, title: str) = {
 	var out = "".toString();
 	appendMoveTo(&out, 1, 1);
 	out.append(title);
+	if (chip.superChip) out.append("  [SUPER-CHIP]");
 	out.append("  |  keys: 1234 qwer asdf zxcv  |  Ctrl-C / Esc: quit");
 	term.writeAll(out.asSlice());
 }
@@ -111,24 +142,26 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) ->
 	var keypad: Keypad;
 	var beeping = false;
 	let bel = 7u8 as char;
-	drawStatus(term, title);
+	drawStatus(term, chip, title);
 	chip.screenDirty = true;
 
 	var deadline = nowNs();
-	while (not keypad.quit and not chip.halted) {
+	var view: Framebuffer;
+	while (not keypad.quit and not chip.halted and not chip.exited) {
 		let now = nowNs();
 		keypad.poll(term, now);
 		keypad.apply(chip, now);
 
 		var n: i64 = 0;
-		while (n < CYCLES_PER_FRAME) {
+		while (n < cyclesPerFrame(chip)) {
 			chip.step();
 			n = n + 1;
 		}
 		chip.tickTimers();
 
 		if (chip.screenDirty) {
-			let frame = renderFrame(&chip.display, at);
+			fillView(chip, &view);
+			let frame = renderFrame(&view, at);
 			term.writeAll(frame.asSlice());
 			chip.screenDirty = false;
 		}
@@ -148,7 +181,7 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) ->
 }
 
 fun runPlaced(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) -> AppResult = {
-	return match (placeCentered(size, STATUS_ROWS)) {
+	return match (placeCentered(size, STATUS_ROWS, viewWidth(chip), viewHeight(chip))) {
 		case at: Placement = runFrames(term, chip, title, at);
 		case small: TooSmall = failed(small);
 	};
@@ -175,13 +208,14 @@ fun runInteractive(chip: ref Chip8, title: str) -> AppResult = {
 # ========== HEADLESS ===========
 
 #{
-# Runs `frames` frames with no input and prints the screen as `#`/`.` rows.
+# Runs `frames` frames with no input and prints the screen at its current
+# resolution as `#`/`.` rows.
 #}
 fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
 	var f: i64 = 0;
-	while (f < frames and not chip.halted) {
+	while (f < frames and not chip.halted and not chip.exited) {
 		var n: i64 = 0;
-		while (n < CYCLES_PER_FRAME) {
+		while (n < cyclesPerFrame(chip)) {
 			chip.step();
 			n = n + 1;
 		}
@@ -190,9 +224,9 @@ fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
 	}
 	var out = "".toString();
 	var y: i64 = 0;
-	while (y < 32) {
+	while (y < chip.height()) {
 		var x: i64 = 0;
-		while (x < 64) {
+		while (x < chip.width()) {
 			if (chip.pixel(x, y)) {
 				out.append('#');
 			} else {

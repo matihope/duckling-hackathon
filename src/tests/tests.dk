@@ -12,6 +12,7 @@ import src.testing.hex;
 import src.utils.split_nul;
 import cpu.addCpuTests;
 import octo.addOctoTests;
+import schip.addSuperChipTests;
 
 fun testU8Wraps() = {
 	let max = 255u8;
@@ -51,5 +52,6 @@ fun allTests() -> List[TestCase] = {
 	tests.push(TestCase("utils.split_nul", testSplitNul));
 	addCpuTests(&tests);
 	addOctoTests(&tests);
+	addSuperChipTests(&tests);
 	return tests;
 }

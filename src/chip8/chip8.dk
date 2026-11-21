@@ -3,9 +3,18 @@
 # No I/O here; a frontend calls `step()` / `tickTimers()`, feeds `keys` and redraws
 # only when `screenDirty` is set.
 #
-# Quirks follow the original COSMAC VIP:
-# 8XY1/2/3 reset VF, 8XY6/8XYE shift VY, FX55/FX65 advance I, BNNN jumps to NNN + V0,
-# sprites clip at the screen edge, DXYN waits for the next frame (display wait).
+# Two modes, chosen with `superChip` before `reset()`:
+#
+# CHIP-8 (default), quirks of the original COSMAC VIP: 8XY1/2/3 reset VF,
+# 8XY6/8XYE shift VY, FX55/FX65 advance I, BNNN jumps to NNN + V0, DXYN waits for
+# the next frame (display wait). 64x32 display.
+#
+# SUPER-CHIP, "modern" behaviour (as in Octo): no VF reset, shifts operate on VX,
+# FX55/FX65 leave I alone, BXNN jumps to XNN + VX, no display wait. Adds 128x64
+# hires mode (00FF/00FE), DXY0 16x16 sprites, scrolling (00CN/00FB/00FC), exit
+# (00FD), the large font (FX30) and flag registers (FX75/FX85).
+#
+# Both modes clip sprites at the screen edge.
 #}
 import core.builtins.*;
 import core.containers.*;
@@ -18,11 +27,15 @@ extern ("C") {
 }
 
 # ========== CONSTANTS ===========
-const SCREEN_W: i64 = 64;
-const SCREEN_H: i64 = 32;
+const LORES_W: i64 = 64;
+const LORES_H: i64 = 32;
+const HIRES_W: i64 = 128;
+const HIRES_H: i64 = 64;
+const DISPLAY_SIZE: i64 = 128 * 64;
 const MEMORY_SIZE: i64 = 4096;
 const PROGRAM_START: u16 = 0x200u16;
 const FONT_START: i64 = 0x50;
+const BIG_FONT_START: i64 = 0xA0; # right after the 80-byte small font
 const STACK_SIZE: i64 = 16;
 
 # `var`, not `const`: a const array literal hangs duckc.
@@ -107,6 +120,170 @@ var FONT: u8[80] = [
 	0xF0u8,
 	0x80u8,
 	0x80u8 # F
+];
+
+# SUPER-CHIP large font (FX30): 16 glyphs of 8x10 pixels, as in Octo.
+var BIG_FONT: u8[160] = [
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8, # 0
+	0x18u8,
+	0x78u8,
+	0x78u8,
+	0x18u8,
+	0x18u8,
+	0x18u8,
+	0x18u8,
+	0x18u8,
+	0xFFu8,
+	0xFFu8, # 1
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8, # 2
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0xFFu8,
+	0xFFu8, # 3
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0x03u8,
+	0x03u8, # 4
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0xFFu8,
+	0xFFu8, # 5
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8, # 6
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0x06u8,
+	0x0Cu8,
+	0x18u8,
+	0x18u8,
+	0x18u8,
+	0x18u8, # 7
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8, # 8
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8,
+	0x03u8,
+	0x03u8,
+	0xFFu8,
+	0xFFu8, # 9
+	0x7Eu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xFFu8,
+	0xFFu8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8, # A
+	0xFCu8,
+	0xFCu8,
+	0xC3u8,
+	0xC3u8,
+	0xFCu8,
+	0xFCu8,
+	0xC3u8,
+	0xC3u8,
+	0xFCu8,
+	0xFCu8, # B
+	0x3Cu8,
+	0xFFu8,
+	0xC3u8,
+	0xC0u8,
+	0xC0u8,
+	0xC0u8,
+	0xC0u8,
+	0xC3u8,
+	0xFFu8,
+	0x3Cu8, # C
+	0xFCu8,
+	0xFEu8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xC3u8,
+	0xFEu8,
+	0xFCu8, # D
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8, # E
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xFFu8,
+	0xFFu8,
+	0xC0u8,
+	0xC0u8,
+	0xC0u8,
+	0xC0u8 # F
 ];
 
 # ========== INSTRUCTIONS ===========
@@ -232,10 +409,30 @@ class Unknown {
 	op: u16;
 }
 
+# SUPER-CHIP
+class ScrollDown {
+	n: i64;
+} # 00CN
+class ScrollRight {} # 00FB
+class ScrollLeft {} # 00FC
+class Exit {} # 00FD
+class Lores {} # 00FE
+class Hires {} # 00FF
+class LoadBigFont {
+	x: i64;
+} # FX30
+class SaveFlags {
+	x: i64;
+} # FX75
+class LoadFlags {
+	x: i64;
+} # FX85
+
 const Instruction = Cls | Ret | Jump | Call | SkipEqImm | SkipNeImm | SkipEqReg | LoadImm | AddImm
 	| Move | Or | And | Xor | AddReg | Sub | ShiftRight | SubN | ShiftLeft | SkipNeReg | LoadI
 	| JumpV0 | Random | Draw | SkipKey | SkipNotKey | LoadDelay | WaitKey | SetDelay | SetSound
-	| AddI | LoadFont | StoreBcd | StoreRegs | LoadRegs | Unknown;
+	| AddI | LoadFont | StoreBcd | StoreRegs | LoadRegs | ScrollDown | ScrollRight | ScrollLeft
+	| Exit | Lores | Hires | LoadBigFont | SaveFlags | LoadFlags | Unknown;
 
 #{
 # Turns a 16-bit opcode into its `Instruction`.
@@ -250,6 +447,12 @@ fun decode(op: u16) -> Instruction = {
 
 	if (op == 0x00E0u16) return Cls();
 	if (op == 0x00EEu16) return Ret();
+	if ((op & 0xFFF0u16) == 0x00C0u16) return ScrollDown(n);
+	if (op == 0x00FBu16) return ScrollRight();
+	if (op == 0x00FCu16) return ScrollLeft();
+	if (op == 0x00FDu16) return Exit();
+	if (op == 0x00FEu16) return Lores();
+	if (op == 0x00FFu16) return Hires();
 	if (kind == 0x1u16) return Jump(nnn);
 	if (kind == 0x2u16) return Call(nnn);
 	if (kind == 0x3u16) return SkipEqImm(x, nn);
@@ -285,6 +488,9 @@ fun decode(op: u16) -> Instruction = {
 		if (nn == 0x33u8) return StoreBcd(x);
 		if (nn == 0x55u8) return StoreRegs(x);
 		if (nn == 0x65u8) return LoadRegs(x);
+		if (nn == 0x30u8) return LoadBigFont(x);
+		if (nn == 0x75u8) return SaveFlags(x);
+		if (nn == 0x85u8) return LoadFlags(x);
 	}
 	return Unknown(op);
 }
@@ -322,13 +528,17 @@ class Chip8 {
 	sp: i64 = 0;
 	dt: u8 = 0u8; # delay timer
 	st: u8 = 0u8; # sound timer
-	display: bool[2048]; # pixel (x, y) at y * 64 + x
+	superChip: bool = false; # SUPER-CHIP mode; set before `reset()`
+	hires: bool = false; # SUPER-CHIP 128x64 mode
+	display: bool[8192]; # pixel (x, y) at y * width() + x
 	keys: bool[16]; # set by the frontend
 	screenDirty: bool = true; # display changed since the frontend last drew it
 	waitingForFrame: bool = false; # DXYN ran this frame (display wait quirk)
 	heldKey: i64 = -1; # FX0A: key seen pressed, waiting for its release
 	halted: bool = false;
 	haltReason: String;
+	exited: bool = false; # SUPER-CHIP 00FD ran
+	flags: u8[16]; # SUPER-CHIP FX75/FX85 registers, kept across `reset()`
 
 	#{
 	# Clears the machine and loads the font. Call before `loadRom`.
@@ -345,17 +555,19 @@ class Chip8 {
 			a = a + 1;
 		}
 		a = 0;
+		while (a < 160) {
+			mem[BIG_FONT_START + a] = BIG_FONT[a];
+			a = a + 1;
+		}
+		a = 0;
 		while (a < 16) {
 			v[a] = 0u8;
 			keys[a] = false;
 			stack[a] = 0u16;
 			a = a + 1;
 		}
-		a = 0;
-		while (a < SCREEN_W * SCREEN_H) {
-			display[a] = false;
-			a = a + 1;
-		}
+		hires = false;
+		clearDisplay();
 		i = 0u16;
 		pc = PROGRAM_START;
 		sp = 0;
@@ -366,6 +578,7 @@ class Chip8 {
 		heldKey = -1;
 		halted = false;
 		haltReason.clear();
+		exited = false;
 	}
 
 	#{
@@ -387,7 +600,7 @@ class Chip8 {
 	# while waiting for the next frame after a draw.
 	#}
 	fun step() = {
-		if (halted or waitingForFrame) return;
+		if (halted or exited or waitingForFrame) return;
 		let op = ((mem[pc as i64] as u16) << 8u16) | (mem[wrapAddr(pc as i64 + 1)] as u16);
 		pc = pc + 2u16;
 		execute(decode(op));
@@ -432,6 +645,15 @@ class Chip8 {
 			case it: StoreBcd = exec(it);
 			case it: StoreRegs = exec(it);
 			case it: LoadRegs = exec(it);
+			case it: ScrollDown = exec(it);
+			case it: ScrollRight = exec(it);
+			case it: ScrollLeft = exec(it);
+			case it: Exit = exec(it);
+			case it: Lores = exec(it);
+			case it: Hires = exec(it);
+			case it: LoadBigFont = exec(it);
+			case it: SaveFlags = exec(it);
+			case it: LoadFlags = exec(it);
 			case it: Unknown = exec(it);
 		};
 	}
@@ -445,7 +667,20 @@ class Chip8 {
 		waitingForFrame = false;
 	}
 
-	fun pixel(x: i64, y: i64) -> bool = display[y * SCREEN_W + x];
+	# Current resolution: 64x32, or 128x64 in SUPER-CHIP hires mode.
+	fun width() -> i64 = if hires then HIRES_W else LORES_W;
+	fun height() -> i64 = if hires then HIRES_H else LORES_H;
+
+	fun pixel(x: i64, y: i64) -> bool = display[y * width() + x];
+
+	fun clearDisplay() = {
+		var a: i64 = 0;
+		while (a < DISPLAY_SIZE) {
+			display[a] = false;
+			a = a + 1;
+		}
+		screenDirty = true;
+	}
 
 	# ---------- helpers ----------
 	fun skipIf(cond: bool) = {
@@ -457,15 +692,14 @@ class Chip8 {
 		haltReason = move reason;
 	}
 
-	# ---------- instructions ----------
-	fun exec(it: Cls) = {
-		var a: i64 = 0;
-		while (a < SCREEN_W * SCREEN_H) {
-			display[a] = false;
-			a = a + 1;
-		}
-		screenDirty = true;
+	# False (and halts) when a SUPER-CHIP instruction runs in CHIP-8 mode.
+	fun requireSuperChip(name: str) -> bool = {
+		if (not superChip) halt(f"SUPER-CHIP instruction {name} at {hex4((pc - 2u16) as i64)} (run with --schip)");
+		return superChip;
 	}
+
+	# ---------- instructions ----------
+	fun exec(it: Cls) = clearDisplay();
 
 	fun exec(it: Ret) = {
 		if (sp == 0) {
@@ -509,17 +743,17 @@ class Chip8 {
 
 	fun exec(it: Or) = {
 		v[it.x] = v[it.x] | v[it.y];
-		v[0xF] = 0u8;
+		if (not superChip) v[0xF] = 0u8;
 	}
 
 	fun exec(it: And) = {
 		v[it.x] = v[it.x] & v[it.y];
-		v[0xF] = 0u8;
+		if (not superChip) v[0xF] = 0u8;
 	}
 
 	fun exec(it: Xor) = {
 		v[it.x] = v[it.x] ^ v[it.y];
-		v[0xF] = 0u8;
+		if (not superChip) v[0xF] = 0u8;
 	}
 
 	fun exec(it: AddReg) = {
@@ -541,13 +775,13 @@ class Chip8 {
 	}
 
 	fun exec(it: ShiftRight) = {
-		let value = v[it.y];
+		let value = if superChip then v[it.x] else v[it.y];
 		v[it.x] = value >> 1u8;
 		v[0xF] = value & 1u8;
 	}
 
 	fun exec(it: ShiftLeft) = {
-		let value = v[it.y];
+		let value = if superChip then v[it.x] else v[it.y];
 		v[it.x] = value << 1u8;
 		v[0xF] = value >> 7u8;
 	}
@@ -557,7 +791,9 @@ class Chip8 {
 	}
 
 	fun exec(it: JumpV0) = {
-		pc = it.nnn + (v[0] as u16);
+		var offset = v[0];
+		if (superChip) offset = v[((it.nnn >> 8u16) & 0xFu16) as i64]; # BXNN
+		pc = (it.nnn + (offset as u16)) & 0xFFFu16;
 	}
 
 	fun exec(it: Random) = {
@@ -565,16 +801,23 @@ class Chip8 {
 	}
 
 	fun exec(it: Draw) = {
-		let x0 = (v[it.x] % 64u8) as i64;
-		let y0 = (v[it.y] % 32u8) as i64;
+		let w = width();
+		let h = height();
+		let x0 = (v[it.x] as i64) % w;
+		let y0 = (v[it.y] as i64) % h;
+		# DXY0 in SUPER-CHIP: 16x16 sprite, two bytes per row.
+		let big = superChip and it.n == 0;
+		let rows = if big then 16i64 else it.n;
+		let cols = if big then 16i64 else 8i64;
+		let bytesPerRow = if big then 2i64 else 1i64;
 		var collision = 0u8;
 		var row: i64 = 0;
-		while (row < it.n and y0 + row < SCREEN_H) {
-			let bits = mem[wrapAddr(i as i64 + row)];
+		while (row < rows and y0 + row < h) {
 			var col: i64 = 0;
-			while (col < 8 and x0 + col < SCREEN_W) {
-				if (((bits >> (7 - col) as u8) & 1u8) == 1u8) {
-					let idx = (y0 + row) * SCREEN_W + x0 + col;
+			while (col < cols and x0 + col < w) {
+				let bits = mem[wrapAddr(i as i64 + row * bytesPerRow + col / 8)];
+				if (((bits >> (7 - col % 8) as u8) & 1u8) == 1u8) {
+					let idx = (y0 + row) * w + x0 + col;
 					if (display[idx]) collision = 1u8;
 					display[idx] = not display[idx];
 				}
@@ -584,7 +827,7 @@ class Chip8 {
 		}
 		v[0xF] = collision;
 		screenDirty = true;
-		waitingForFrame = true;
+		if (not superChip) waitingForFrame = true;
 	}
 
 	fun exec(it: SkipKey) = skipIf(keys[(v[it.x] & 0xFu8) as i64]);
@@ -640,7 +883,7 @@ class Chip8 {
 			mem[wrapAddr(i as i64 + r)] = v[r];
 			r = r + 1;
 		}
-		i = i + (it.x as u16) + 1u16;
+		if (not superChip) i = i + (it.x as u16) + 1u16;
 	}
 
 	fun exec(it: LoadRegs) = {
@@ -649,7 +892,98 @@ class Chip8 {
 			v[r] = mem[wrapAddr(i as i64 + r)];
 			r = r + 1;
 		}
-		i = i + (it.x as u16) + 1u16;
+		if (not superChip) i = i + (it.x as u16) + 1u16;
+	}
+
+	# ---------- SUPER-CHIP ----------
+	fun exec(it: ScrollDown) = {
+		if (requireSuperChip("00CN")) {
+			let w = width();
+			var y = height() - 1;
+			while (y >= 0) {
+				var x: i64 = 0;
+				while (x < w) {
+					display[y * w + x] = y >= it.n and display[(y - it.n) * w + x];
+					x = x + 1;
+				}
+				y = y - 1;
+			}
+			screenDirty = true;
+		}
+	}
+
+	fun exec(it: ScrollRight) = {
+		if (requireSuperChip("00FB")) {
+			let w = width();
+			var y: i64 = 0;
+			while (y < height()) {
+				var x = w - 1;
+				while (x >= 0) {
+					display[y * w + x] = x >= 4 and display[y * w + x - 4];
+					x = x - 1;
+				}
+				y = y + 1;
+			}
+			screenDirty = true;
+		}
+	}
+
+	fun exec(it: ScrollLeft) = {
+		if (requireSuperChip("00FC")) {
+			let w = width();
+			var y: i64 = 0;
+			while (y < height()) {
+				var x: i64 = 0;
+				while (x < w) {
+					display[y * w + x] = x < w - 4 and display[y * w + x + 4];
+					x = x + 1;
+				}
+				y = y + 1;
+			}
+			screenDirty = true;
+		}
+	}
+
+	fun exec(it: Exit) = {
+		if (requireSuperChip("00FD")) exited = true;
+	}
+
+	fun exec(it: Lores) = {
+		if (requireSuperChip("00FE")) {
+			hires = false;
+			clearDisplay();
+		}
+	}
+
+	fun exec(it: Hires) = {
+		if (requireSuperChip("00FF")) {
+			hires = true;
+			clearDisplay();
+		}
+	}
+
+	fun exec(it: LoadBigFont) = {
+		if (requireSuperChip("FX30")) i = (BIG_FONT_START + ((v[it.x] & 0xFu8) as i64) * 10) as u16;
+	}
+
+	fun exec(it: SaveFlags) = {
+		if (requireSuperChip("FX75")) {
+			var r: i64 = 0;
+			while (r <= it.x) {
+				flags[r] = v[r];
+				r = r + 1;
+			}
+		}
+	}
+
+	fun exec(it: LoadFlags) = {
+		if (requireSuperChip("FX85")) {
+			var r: i64 = 0;
+			while (r <= it.x) {
+				v[r] = flags[r];
+				r = r + 1;
+			}
+		}
 	}
 
 	fun exec(it: Unknown) = {

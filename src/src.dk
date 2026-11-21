@@ -18,7 +18,7 @@ import tui.render.TooSmall;
 import chip8.octo.assembleOcto;
 import chip8.octo.OctoError;
 
-const USAGE: str = "usage: duckling-hackathon <rom.ch8 | program.8o> [--dump <frames>] | -t [filter]";
+const USAGE: str = "usage: duckling-hackathon <rom.ch8 | program.8o> [--schip] [--dump <frames>] | -t [filter]";
 
 # Non-negative decimal from `s`, or -1.
 fun parseCount(s: str) -> i64 = {
@@ -33,16 +33,25 @@ fun parseCount(s: str) -> i64 = {
 	return value;
 }
 
-fun start(chip: ref Chip8, path: str, dumpFrames: i64) -> AppResult = {
-	if (dumpFrames >= 0) return runHeadless(chip, dumpFrames);
+#{
+# Command-line options after the ROM path.
+#}
+class Options {
+	dumpFrames: i64 = -1; # --dump N: run headless for N frames, print the screen
+	superChip: bool = false; # --schip
+}
+
+fun start(chip: ref Chip8, path: str, opts: Options) -> AppResult = {
+	if (opts.dumpFrames >= 0) return runHeadless(chip, opts.dumpFrames);
 	return runInteractive(chip, path);
 }
 
-fun runRom(rom: ref String, path: str, dumpFrames: i64) -> AppResult = {
+fun runRom(rom: ref String, path: str, opts: Options) -> AppResult = {
 	var chip: Chip8;
+	chip.superChip = opts.superChip;
 	chip.reset();
 	return match (chip.loadRom(rom.asSlice())) {
-		case _: Ok[()] = start(&chip, path, dumpFrames);
+		case _: Ok[()] = start(&chip, path, opts);
 		case e: Err[RomTooBig] = failed(e.error);
 	};
 }
@@ -63,9 +72,9 @@ fun asmFailed(path: str, e: ref OctoError) -> AppResult = failed(AsmFailed(path.
 #{
 # Assembles an Octo source, then runs it.
 #}
-fun runOcto(source: ref String, path: str, dumpFrames: i64) -> AppResult = {
+fun runOcto(source: ref String, path: str, opts: Options) -> AppResult = {
 	return match (assembleOcto(source.asSlice())) {
-		case rom: Ok[String] = runRom(&rom.value, path, dumpFrames);
+		case rom: Ok[String] = runRom(&rom.value, path, opts);
 		case e: Err[OctoError] = asmFailed(path, &e.error);
 	};
 }
@@ -73,14 +82,14 @@ fun runOcto(source: ref String, path: str, dumpFrames: i64) -> AppResult = {
 #{
 # Runs a `.ch8` ROM, or a `.8o` Octo source after assembling it.
 #}
-fun runContent(content: ref String, path: str, dumpFrames: i64) -> AppResult = {
-	if (endsWith(path, ".8o")) return runOcto(content, path, dumpFrames);
-	return runRom(content, path, dumpFrames);
+fun runContent(content: ref String, path: str, opts: Options) -> AppResult = {
+	if (endsWith(path, ".8o")) return runOcto(content, path, opts);
+	return runRom(content, path, opts);
 }
 
-fun runFile(path: str, dumpFrames: i64) -> AppResult = {
+fun runFile(path: str, opts: Options) -> AppResult = {
 	return match (read_file(path)) {
-		case content: String = runContent(&content, path, dumpFrames);
+		case content: String = runContent(&content, path, opts);
 		case _ = failed(ReadFailed(path.toString()));
 	};
 }
@@ -123,13 +132,22 @@ fun main() = {
 	}
 
 	let path = args.value().at(1i64).asSlice();
-	var dumpFrames: i64 = -1;
-	if (args.value().length() > 2i64) {
-		if (args.value().length() != 4i64 or not strEq(args.value().at(2i64).asSlice(), "--dump")) exit_with_error(USAGE);
-		dumpFrames = parseCount(args.value().at(3i64).asSlice());
-		if (dumpFrames < 0) exit_with_error(USAGE);
+	var opts: Options;
+	var k: i64 = 2;
+	while (k < args.value().length()) {
+		let arg = args.value().at(k).asSlice();
+		if (strEq(arg, "--schip")) {
+			opts.superChip = true;
+			k = k + 1;
+		} else if (strEq(arg, "--dump") and k + 1 < args.value().length()) {
+			opts.dumpFrames = parseCount(args.value().at(k + 1).asSlice());
+			if (opts.dumpFrames < 0) exit_with_error(USAGE);
+			k = k + 2;
+		} else {
+			exit_with_error(USAGE);
+		}
 	}
 
-	var result = runFile(path, dumpFrames);
+	var result = runFile(path, opts);
 	return exitCode(&result);
 }

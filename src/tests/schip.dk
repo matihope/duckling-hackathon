@@ -1,0 +1,158 @@
+#{
+# SUPER-CHIP tests: "modern" quirks and the extra instructions.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.chip8.Chip8;
+import src.chip8.octo.octo;
+import src.testing.TestCase;
+import src.testing.check;
+import src.testing.checkEq;
+
+fun steps(c: ref Chip8, n: i64) = {
+	var k: i64 = 0;
+	while (k < n) {
+		c.step();
+		k = k + 1;
+	}
+}
+
+fun superChip() -> Chip8 = {
+	var c: Chip8;
+	c.superChip = true;
+	c.reset();
+	return c;
+}
+
+fun testShiftUsesVx() = {
+	var c = superChip();
+	expand octo("c", ": main  v1 := 0x81  v0 := 0x03  v0 >>= v1  v2 := 0x81  v2 <<= v1");
+	steps(&c, 3);
+	checkEq(c.v[0], 0x01, "SHR shifts VX, ignores VY");
+	checkEq(c.v[0xF], 1, "SHR shifted-out bit of VX");
+	steps(&c, 2);
+	checkEq(c.v[2], 0x02, "SHL shifts VX");
+}
+
+fun testLogicKeepsVf() = {
+	var c = superChip();
+	expand octo("c", ": main  vf := 5  v0 := 0x0C  v1 := 0x0A  v0 |= v1");
+	steps(&c, 4);
+	checkEq(c.v[0], 0x0E, "OR");
+	checkEq(c.v[0xF], 5, "VF untouched");
+}
+
+fun testSaveLoadKeepI() = {
+	var c = superChip();
+	expand octo("c", ": main  i := 0x300  v0 := 7  v1 := 9  save v1  load v1");
+	steps(&c, 5);
+	checkEq(c.i, 0x300, "I unchanged");
+	checkEq(c.mem[0x301], 9, "saved V1");
+}
+
+fun testJumpUsesVx() = {
+	var c = superChip();
+	expand octo("c", ": main  v2 := 4  jump0 0x210");
+	steps(&c, 2);
+	checkEq(c.pc, 0x214, "B210 jumps to 0x210 + V2");
+}
+
+fun testNoDisplayWait() = {
+	var c = superChip();
+	expand octo("c", ": main  sprite v0 v0 1  sprite v0 v0 1");
+	steps(&c, 2);
+	checkEq(c.pc, 0x204, "both draws ran in the same frame");
+}
+
+fun testHiresAndBigSprite() = {
+	var c = superChip();
+	expand octo(
+		"c",
+		": main  hires  i := big  v0 := 100  v1 := 40  sprite v0 v1 0  : spin  jump spin  : big  0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x80 0x01"
+	);
+	steps(&c, 5);
+	check(c.hires, "hires on");
+	checkEq(c.width(), 128, "width");
+	checkEq(c.height(), 64, "height");
+	check(c.pixel(100, 40), "16x16 top-left");
+	check(c.pixel(115, 54), "16x16 row 14 right edge");
+	check(c.pixel(100, 55) and not c.pixel(101, 55), "last row left byte 0x80");
+	check(c.pixel(115, 55) and not c.pixel(114, 55), "last row right byte 0x01");
+	check(not c.pixel(116, 40), "16 wide only");
+	checkEq(c.v[0xF], 0, "no collision");
+}
+
+fun testResolutionSwitchClears() = {
+	var c = superChip();
+	expand octo("c", ": main  i := dot  sprite v0 v0 1  hires  : spin  jump spin  : dot  0x80");
+	steps(&c, 2);
+	check(c.pixel(0, 0), "drawn in lores");
+	c.screenDirty = false;
+	steps(&c, 1);
+	check(not c.pixel(0, 0), "hires cleared the screen");
+	check(c.screenDirty, "and marked it dirty");
+}
+
+fun testScrolling() = {
+	var c = superChip();
+	expand octo(
+		"c",
+		": main  i := dot  sprite v0 v0 1  scroll-down 3  scroll-right  scroll-right  scroll-left  : spin  jump spin  : dot  0x80"
+	);
+	steps(&c, 3);
+	check(c.pixel(0, 3) and not c.pixel(0, 0), "scroll-down 3");
+	steps(&c, 2);
+	check(c.pixel(8, 3), "scroll-right twice: 8 pixels");
+	steps(&c, 1);
+	check(c.pixel(4, 3) and not c.pixel(8, 3), "scroll-left: 4 pixels");
+}
+
+fun testBigFont() = {
+	var c = superChip();
+	expand octo("c", ": main  v0 := 3  i := bighex v0");
+	steps(&c, 2);
+	checkEq(c.i, 0xA0 + 30, "I at glyph 3");
+	checkEq(c.mem[c.i as i64], 0xFF, "glyph 3 first row");
+	checkEq(c.mem[c.i as i64 + 9], 0xFF, "glyph 3 last row");
+}
+
+fun testFlags() = {
+	var c = superChip();
+	expand octo("c", ": main  v0 := 11  v1 := 22  saveflags v1  v0 := 0  v1 := 0  loadflags v1");
+	steps(&c, 6);
+	checkEq(c.v[0], 11, "V0 restored");
+	checkEq(c.v[1], 22, "V1 restored");
+}
+
+fun testExit() = {
+	var c = superChip();
+	expand octo("c", ": main  exit  v0 := 1");
+	steps(&c, 3);
+	check(c.exited, "exited");
+	checkEq(c.v[0], 0, "nothing runs after exit");
+	check(not c.halted, "exit is not an error");
+}
+
+fun testRejectedInChip8Mode() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ": main  hires");
+	steps(&c, 1);
+	check(c.halted, "halted");
+	check(not c.hires, "stayed in lores");
+}
+
+fun addSuperChipTests(tests: ref List[TestCase]) = {
+	tests.push(TestCase("schip.shift_vx", testShiftUsesVx));
+	tests.push(TestCase("schip.logic_keeps_vf", testLogicKeepsVf));
+	tests.push(TestCase("schip.save_load_keep_i", testSaveLoadKeepI));
+	tests.push(TestCase("schip.jump_vx", testJumpUsesVx));
+	tests.push(TestCase("schip.no_display_wait", testNoDisplayWait));
+	tests.push(TestCase("schip.hires_big_sprite", testHiresAndBigSprite));
+	tests.push(TestCase("schip.resolution_clears", testResolutionSwitchClears));
+	tests.push(TestCase("schip.scrolling", testScrolling));
+	tests.push(TestCase("schip.big_font", testBigFont));
+	tests.push(TestCase("schip.flags", testFlags));
+	tests.push(TestCase("schip.exit", testExit));
+	tests.push(TestCase("schip.rejected_in_chip8", testRejectedInChip8Mode));
+}
