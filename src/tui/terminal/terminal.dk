@@ -72,6 +72,17 @@ fun appendCsi(out: ref mut String, tail: str) = {
 	out.append(tail);
 }
 
+#{
+# Appends a cursor move to 1-based `row`, `col` (`ESC [ row ; col H`).
+#}
+fun appendMoveTo(out: ref mut String, row: i64, col: i64) = {
+	var tail = row.toString();
+	tail.append(';');
+	tail.append(col.toString());
+	tail.append('H');
+	appendCsi(out, tail.asSlice());
+}
+
 # ========== TERMINAL ===========
 class Terminal {
 	private original: Termios; # The original settings to put back on exit.
@@ -103,6 +114,7 @@ class Terminal {
 		var out = "".toString();
 		appendCsi(&out, "?1049h"); # Enter alternate screen
 		appendCsi(&out, "?25l"); # Hide cursor
+		appendCsi(&out, "?7l"); # No autowrap: text past the last column is cut, never scrolls
 		appendCsi(&out, "2J"); # Clear it
 		term.writeAll(out.asSlice());
 		return term;
@@ -115,6 +127,7 @@ class Terminal {
 	public mut fun restore() = {
 		if (active) {
 			var out = "".toString();
+			appendCsi(&out, "?7h"); # autowrap back on
 			appendCsi(&out, "?25h"); # show cursor
 			appendCsi(&out, "?1049l"); # leave alternate screen
 			writeAll(out.asSlice());

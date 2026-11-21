@@ -28,11 +28,11 @@ fun read_file(path: str) -> ?String = {
     let f = open_file(path, "r");
     if (f as u64 == 0u64) return none;
 
+    var content: String;
     let chunk = allocation[char].many_alloc(CHUNK);
     var n = fread(chunk as cptr u8, 1u64, CHUNK as u64, f) as i64;
     while (n > 0i64) {
         var i = 0i64;
-        var content: String;
         while (i < n) {
             content.append(chunk[i]);
             i = i + 1i64;
