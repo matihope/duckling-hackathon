@@ -22,9 +22,10 @@ const MAX_HEIGHT: i64 = 64;
 
 #{
 # A screen of up to 128x64 pixels: pixel (x, y) of a W-wide screen is at index
-# `y * W + x`. Same type as the emulator's `display: bool[8192]`.
+# `y * W + x`. Same type as the emulator's `display: u8[8192]`: 0 = off, anything else = on.
+# (`u8`, not `bool`: a `bool[N]` class field breaks the class layout in duckc.)
 #}
-const Framebuffer = bool[MAX_WIDTH * MAX_HEIGHT];
+const Framebuffer = u8[MAX_WIDTH * MAX_HEIGHT];
 
 #{
 # Terminal cells taken by a `width` x `height` screen together with its border.
@@ -89,7 +90,7 @@ fun placeCentered(size: Winsize, reserved_rows: i64, width: i64, height: i64) ->
 #{
 # Whether pixel (`x`, `y`) is turned on.
 #}
-fun pixelAt(fb: ref Framebuffer, width: i64, x: i64, y: i64) -> bool = fb[y * width + x];
+fun pixelAt(fb: ref Framebuffer, width: i64, x: i64, y: i64) -> bool = fb[y * width + x] != 0u8;
 
 #{
 # The half-block character showing the `top` and `bottom` pixels of one cell.

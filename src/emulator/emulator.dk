@@ -83,7 +83,7 @@ class Keypad {
 	fun apply(chip: ref Chip8, now: i64) = {
 		var k: i64 = 0;
 		while (k < 16) {
-			chip.keys[k] = now < heldUntil[k];
+			chip.setKey(k, now < heldUntil[k]);
 			k = k + 1;
 		}
 	}

@@ -155,10 +155,10 @@ fun testWaitKeyNeedsRelease() = {
 	expand octo("c", ": main  v0 := key");
 	c.run(1);
 	checkEq(c.pc, 0x200, "waits with no key");
-	c.keys[5] = true;
+	c.setKey(5, true);
 	c.run(1);
 	checkEq(c.pc, 0x200, "still waits while held");
-	c.keys[5] = false;
+	c.setKey(5, false);
 	c.run(1);
 	checkEq(c.pc, 0x202, "continues on release");
 	checkEq(c.v[0], 5, "key stored");
@@ -167,7 +167,7 @@ fun testWaitKeyNeedsRelease() = {
 fun testSkipKey() = {
 	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 0xA  if v0 -key then  v1 := 1  if v0 key then  v2 := 1");
-	c.keys[0xA] = true;
+	c.setKey(0xA, true);
 	c.run(4);
 	checkEq(c.v[1], 0, "SKP skipped");
 	checkEq(c.v[2], 1, "SKNP didn't skip");
