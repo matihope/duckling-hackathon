@@ -5,9 +5,7 @@
 # Note: quackfreeze.json is the dependency lockfile — keep it committed.
 
 # Editors
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
+.vscode/
 .idea/
 *.swp
 *.swo

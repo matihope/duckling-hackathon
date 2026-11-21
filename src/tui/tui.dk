@@ -1,0 +1,115 @@
+#{
+#     C FFI bindings needed to play with the terminal
+#     @note: All of these symbols live in libc, which is linked by default.
+#}
+
+extern ("C") {
+	# ========== TYPES ===========
+
+	#{ struct termios (glibc, <bits/termios-struct.h>). #}
+	class Termios {
+		c_iflag: u32 = 0u32; # input modes
+		c_oflag: u32 = 0u32; # output modes
+		c_cflag: u32 = 0u32; # control modes
+		c_lflag: u32 = 0u32; # local modes
+		c_line: u8 = 0u8; # line discipline
+		c_cc: u8[32]; # control characters (NCCS == 32)
+		c_ispeed: u32 = 0u32; # input speed
+		c_ospeed: u32 = 0u32; # output speed
+	}
+
+	#{ struct winsize (<sys/ioctl.h>) #}
+	class Winsize {
+		ws_row: u16 = 0u16;
+		ws_col: u16 = 0u16;
+		ws_xpixel: u16 = 0u16;
+		ws_ypixel: u16 = 0u16;
+	}
+
+	#{ struct timespec (<time.h>). #}
+	class Timespec {
+		tv_sec: i64 = 0i64; # whole seconds
+		tv_nsec: i64 = 0i64; # nanoseconds, 0..999_999_999
+	}
+
+	# ========== unistd.h ===========
+	fundecl read(fd: i32, buf: cptr mut u8, count: u64) -> i64;
+	fundecl write(fd: i32, buf: cptr u8, count: u64) -> i64;
+	fundecl isatty(fd: i32) -> i32;
+
+	# ========== termios.h ===========
+	fundecl tcgetattr(fd: i32, termios_p: cptr mut Termios) -> i32;
+	fundecl tcsetattr(fd: i32, optional_actions: i32, termios_p: cptr Termios) -> i32;
+
+	# ========== sys/ioctl.h ===========
+	@cffi_variadic_fixed_params(2)
+	fundecl ioctl(fd: i32, request: u64, arg: cptr mut Winsize) -> i32;
+
+	# ========== time.h ===========
+	fundecl clock_gettime(clock_id: i32, tp: cptr mut Timespec) -> i32;
+	fundecl nanosleep(req: cptr Timespec, rem: cptr mut Timespec) -> i32;
+
+	# ========== errno / stdlib / stdio ===========
+	fundecl __errno_location() -> cptr mut i32;
+	fundecl exit(status: i32) -> ();
+	fundecl perror(s: cptr char) -> ();
+	fundecl iscntrl(c: i32) -> i32;
+}
+
+# ========== CONSTANTS ===========
+# IO
+const STDIN_FILENO: i32 = 0i32;
+const STDOUT_FILENO: i32 = 1i32;
+const STDERR_FILENO: i32 = 2i32;
+
+# tcsetattr optional_actions
+const TCSANOW: i32 = 0i32;
+const TCSADRAIN: i32 = 1i32;
+const TCSAFLUSH: i32 = 2i32;
+
+# c_iflag bits
+const BRKINT: u32 = 2u32; # 0000002
+const INPCK: u32 = 16u32; # 0000020
+const ISTRIP: u32 = 32u32; # 0000040
+const ICRNL: u32 = 256u32; # 0000400
+const IXON: u32 = 1024u32; # 0002000
+
+# c_oflag bits
+const OPOST: u32 = 1u32; # 0000001
+
+# c_cflag bits
+const CS8: u32 = 48u32; # 0000060
+
+# c_lflag bits
+const ISIG: u32 = 1u32; # 0000001
+const ICANON: u32 = 2u32; # 0000002
+const ECHO: u32 = 8u32; # 0000010
+const IEXTEN: u32 = 32768u32; # 0100000
+
+# c_cc indices
+const VTIME: i64 = 5;
+const VMIN: i64 = 6;
+
+# errno values
+const EINTR: i32 = 4i32;
+const EAGAIN: i32 = 11i32;
+
+# ioctl requests
+const TIOCGWINSZ: u64 = 21523u64; # 0x5413
+
+# clock_gettime clocks
+const CLOCK_MONOTONIC: i32 = 1i32;
+
+# ========== HELPERS ===========
+
+#{ 
+# Current value of `errno`.
+#}
+fun getErrno() -> i32 = *__errno_location();
+
+#{ 
+# Overwrites `errno`.
+#}
+fun setErrno(value: i32) = {
+	*__errno_location() = value;
+}

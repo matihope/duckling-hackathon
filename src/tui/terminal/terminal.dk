@@ -1,0 +1,149 @@
+#{
+# Terminal session with raw mode, alternate screen, hidden cursor.
+#}
+import core.builtins.*;
+import core.containers.*;
+import tui.*;
+
+# ========== ERRORS ===========
+class TerminalError {
+	public call: str; # Name of the function that failed, or the message when `errno == 0`
+	public errno: i32 = 0; # Errno right after the failed call. 0 when there is none
+
+	#{ 
+	# TerminalError when a function failed. Reports the current errno 
+	#}
+	public global fun withErrno(function: str) -> TerminalError = TerminalError(
+		function,
+		getErrno()
+	);
+
+	#{ 
+	# TerminalError when we just fail with the message. No errno.
+	#}
+	public global fun withMessage(message: str) -> TerminalError = TerminalError(message, 0);
+
+	#{
+	# Reports a message to stderr.
+	#}
+	public fun report() -> i64 = {
+		var msg = call.toString();
+		if (errno == 0) {
+			msg.append('\n');
+			writeAllTo(STDERR_FILENO, msg.asSlice());
+		} else {
+			setErrno(errno);
+			msg.append('\0');
+			perror(ptr_from_slice[char](msg.asSlice()) as cptr char);
+		}
+		return 1;
+	}
+}
+
+#{
+# Writes the whole buffer to `fd`.
+#}
+fun writeAllTo(fd: i32, bytes: str) -> bool = {
+	let p = ptr_from_slice[char](bytes) as cptr u8;
+	let total = bytes.length();
+	var done: i64 = 0;
+	while (done < total) {
+		let n = write(fd, &p[done] as cptr u8, (total - done) as u64);
+		if (n == -1) {
+			if (getErrno() != EINTR) return false;
+		} else {
+			done = done + n;
+		}
+	}
+	return true;
+}
+
+# ========== ESCAPE CODES ===========
+
+# The ESC byte (27).
+const ESC: char = (27 as char, 0)._1;
+
+#{ 
+# Appends `ESC [ <tail>` to `out`. 
+#}
+fun appendCsi(out: ref mut String, tail: str) = {
+	out.append(ESC);
+	out.append('[');
+	out.append(tail);
+}
+
+# ========== TERMINAL ===========
+class Terminal {
+	private original: Termios; # The original settings to put back on exit.
+	private active: bool = false; # Whether the terminal still needs restoring.
+
+	public Terminal.destroy() = {
+		restore();
+	}
+
+	#{
+	# Puts stdin into raw, non-blocking mode, switches to the alternate screen 
+	# and hides the cursor. Fails if stdin is not a terminal.
+	#}
+	public global fun open() -> Terminal | TerminalError = {
+		var saved: Termios;
+		if (tcgetattr(STDIN_FILENO, &saved as cptr mut Termios) == -1) return TerminalError.withErrno("tcgetattr");
+
+		var raw = saved;
+		raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+		raw.c_oflag &= ~(OPOST);
+		raw.c_cflag |= CS8;
+		raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+		raw.c_cc[VMIN] = 0u8; # Minimal number of bytes before read can return.
+		raw.c_cc[VTIME] = 0u8; # Maximum amount of time to wait before read.
+
+		if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw as cptr Termios) == -1) return TerminalError.withErrno("tcsetattr");
+
+		var term = Terminal(saved, true);
+		var out = "".toString();
+		appendCsi(&out, "?1049h"); # Enter alternate screen
+		appendCsi(&out, "?25l"); # Hide cursor
+		appendCsi(&out, "2J"); # Clear it
+		term.writeAll(out.asSlice());
+		return term;
+	}
+
+	#{
+	# Leaves the alternate screen, shows the cursor and restores the original
+	# termios.
+	#}
+	public mut fun restore() = {
+		if (active) {
+			var out = "".toString();
+			appendCsi(&out, "?25h"); # show cursor
+			appendCsi(&out, "?1049l"); # leave alternate screen
+			writeAll(out.asSlice());
+			tcsetattr(STDIN_FILENO, TCSAFLUSH, &original as cptr Termios);
+			active = false;
+		}
+	}
+
+	#{ 
+	# Current terminal size in char count.
+	#}
+	public fun size() -> Winsize | TerminalError = {
+		var ws: Winsize;
+		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws as cptr mut Winsize) == -1) return TerminalError.withErrno("ioctl(TIOCGWINSZ)");
+		if (ws.ws_col == 0u16 or ws.ws_row == 0u16) return TerminalError.withMessage("terminal size of 0");
+		return ws;
+	}
+
+	#{ 
+	# Non-blocking read of one byte. `none` when there is nothing to read.
+	#}
+	public fun readByte() -> ?u8 = {
+		var c: u8 = 0u8;
+		if (read(STDIN_FILENO, &c as cptr mut u8, 1u64) == 1i64) return c;
+		return none;
+	}
+
+	#{
+	# Writes the whole buffer to stdout, retrying on short writes and EINTR.
+	#}
+	public fun writeAll(bytes: str) -> bool = writeAllTo(STDOUT_FILENO, bytes);
+}
