@@ -1,3 +1,498 @@
-fun test() = {
-    return 1;
+#{
+# CHIP-8 interpreter core: memory, registers, timers, display and keypad state.
+# No I/O here; a frontend calls `step()` / `tickTimers()`, feeds `keys` and redraws
+# only when `screenDirty` is set.
+#
+# Quirks follow the original COSMAC VIP:
+# 8XY1/2/3 reset VF, 8XY6/8XYE shift VY, FX55/FX65 advance I, BNNN jumps to NNN + V0,
+# sprites clip at the screen edge, DXYN waits for the next frame (display wait).
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.result.Ok;
+import src.result.Err;
+import src.result.Result;
+
+extern("C") {
+	fundecl rand() -> i32;
+}
+
+# ========== CONSTANTS ===========
+const SCREEN_W: i64 = 64;
+const SCREEN_H: i64 = 32;
+const MEMORY_SIZE: i64 = 4096;
+const PROGRAM_START: u16 = 0x200u16;
+const FONT_START: i64 = 0x50;
+const STACK_SIZE: i64 = 16;
+
+# `var`, not `const`: a const array literal hangs duckc.
+var FONT: u8[80] = [
+	0xF0u8, 0x90u8, 0x90u8, 0x90u8, 0xF0u8, # 0
+	0x20u8, 0x60u8, 0x20u8, 0x20u8, 0x70u8, # 1
+	0xF0u8, 0x10u8, 0xF0u8, 0x80u8, 0xF0u8, # 2
+	0xF0u8, 0x10u8, 0xF0u8, 0x10u8, 0xF0u8, # 3
+	0x90u8, 0x90u8, 0xF0u8, 0x10u8, 0x10u8, # 4
+	0xF0u8, 0x80u8, 0xF0u8, 0x10u8, 0xF0u8, # 5
+	0xF0u8, 0x80u8, 0xF0u8, 0x90u8, 0xF0u8, # 6
+	0xF0u8, 0x10u8, 0x20u8, 0x40u8, 0x40u8, # 7
+	0xF0u8, 0x90u8, 0xF0u8, 0x90u8, 0xF0u8, # 8
+	0xF0u8, 0x90u8, 0xF0u8, 0x10u8, 0xF0u8, # 9
+	0xF0u8, 0x90u8, 0xF0u8, 0x90u8, 0x90u8, # A
+	0xE0u8, 0x90u8, 0xE0u8, 0x90u8, 0xE0u8, # B
+	0xF0u8, 0x80u8, 0x80u8, 0x80u8, 0xF0u8, # C
+	0xE0u8, 0x90u8, 0x90u8, 0x90u8, 0xE0u8, # D
+	0xF0u8, 0x80u8, 0xF0u8, 0x80u8, 0xF0u8, # E
+	0xF0u8, 0x80u8, 0xF0u8, 0x80u8, 0x80u8  # F
+];
+
+# ========== INSTRUCTIONS ===========
+# One class per opcode; `x`/`y` are register indices, `nn` a byte, `nnn` an address.
+
+class Cls {}                                  # 00E0
+class Ret {}                                  # 00EE
+class Jump { nnn: u16; }                      # 1NNN
+class Call { nnn: u16; }                      # 2NNN
+class SkipEqImm { x: i64; nn: u8; }           # 3XNN
+class SkipNeImm { x: i64; nn: u8; }           # 4XNN
+class SkipEqReg { x: i64; y: i64; }           # 5XY0
+class LoadImm { x: i64; nn: u8; }             # 6XNN
+class AddImm { x: i64; nn: u8; }              # 7XNN
+class Move { x: i64; y: i64; }                # 8XY0
+class Or { x: i64; y: i64; }                  # 8XY1
+class And { x: i64; y: i64; }                 # 8XY2
+class Xor { x: i64; y: i64; }                 # 8XY3
+class AddReg { x: i64; y: i64; }              # 8XY4
+class Sub { x: i64; y: i64; }                 # 8XY5
+class ShiftRight { x: i64; y: i64; }          # 8XY6
+class SubN { x: i64; y: i64; }                # 8XY7
+class ShiftLeft { x: i64; y: i64; }           # 8XYE
+class SkipNeReg { x: i64; y: i64; }           # 9XY0
+class LoadI { nnn: u16; }                     # ANNN
+class JumpV0 { nnn: u16; }                    # BNNN
+class Random { x: i64; nn: u8; }              # CXNN
+class Draw { x: i64; y: i64; n: i64; }        # DXYN
+class SkipKey { x: i64; }                     # EX9E
+class SkipNotKey { x: i64; }                  # EXA1
+class LoadDelay { x: i64; }                   # FX07
+class WaitKey { x: i64; }                     # FX0A
+class SetDelay { x: i64; }                    # FX15
+class SetSound { x: i64; }                    # FX18
+class AddI { x: i64; }                        # FX1E
+class LoadFont { x: i64; }                    # FX29
+class StoreBcd { x: i64; }                    # FX33
+class StoreRegs { x: i64; }                   # FX55
+class LoadRegs { x: i64; }                    # FX65
+class Unknown { op: u16; }
+
+const Instruction = Cls | Ret | Jump | Call | SkipEqImm | SkipNeImm | SkipEqReg | LoadImm
+	| AddImm | Move | Or | And | Xor | AddReg | Sub | ShiftRight | SubN | ShiftLeft | SkipNeReg
+	| LoadI | JumpV0 | Random | Draw | SkipKey | SkipNotKey | LoadDelay | WaitKey | SetDelay
+	| SetSound | AddI | LoadFont | StoreBcd | StoreRegs | LoadRegs | Unknown;
+
+#{
+# Turns a 16-bit opcode into its `Instruction`.
+#}
+fun decode(op: u16) -> Instruction = {
+	let kind = op >> 12u16;
+	let x = ((op >> 8u16) & 0xFu16) as i64;
+	let y = ((op >> 4u16) & 0xFu16) as i64;
+	let n = (op & 0xFu16) as i64;
+	let nn = (op & 0xFFu16) as u8;
+	let nnn = op & 0xFFFu16;
+
+	if (op == 0x00E0u16) return Cls();
+	if (op == 0x00EEu16) return Ret();
+	if (kind == 0x1u16) return Jump(nnn);
+	if (kind == 0x2u16) return Call(nnn);
+	if (kind == 0x3u16) return SkipEqImm(x, nn);
+	if (kind == 0x4u16) return SkipNeImm(x, nn);
+	if (kind == 0x5u16 and n == 0) return SkipEqReg(x, y);
+	if (kind == 0x6u16) return LoadImm(x, nn);
+	if (kind == 0x7u16) return AddImm(x, nn);
+	if (kind == 0x8u16) {
+		if (n == 0x0) return Move(x, y);
+		if (n == 0x1) return Or(x, y);
+		if (n == 0x2) return And(x, y);
+		if (n == 0x3) return Xor(x, y);
+		if (n == 0x4) return AddReg(x, y);
+		if (n == 0x5) return Sub(x, y);
+		if (n == 0x6) return ShiftRight(x, y);
+		if (n == 0x7) return SubN(x, y);
+		if (n == 0xE) return ShiftLeft(x, y);
+	}
+	if (kind == 0x9u16 and n == 0) return SkipNeReg(x, y);
+	if (kind == 0xAu16) return LoadI(nnn);
+	if (kind == 0xBu16) return JumpV0(nnn);
+	if (kind == 0xCu16) return Random(x, nn);
+	if (kind == 0xDu16) return Draw(x, y, n);
+	if (kind == 0xEu16 and nn == 0x9Eu8) return SkipKey(x);
+	if (kind == 0xEu16 and nn == 0xA1u8) return SkipNotKey(x);
+	if (kind == 0xFu16) {
+		if (nn == 0x07u8) return LoadDelay(x);
+		if (nn == 0x0Au8) return WaitKey(x);
+		if (nn == 0x15u8) return SetDelay(x);
+		if (nn == 0x18u8) return SetSound(x);
+		if (nn == 0x1Eu8) return AddI(x);
+		if (nn == 0x29u8) return LoadFont(x);
+		if (nn == 0x33u8) return StoreBcd(x);
+		if (nn == 0x55u8) return StoreRegs(x);
+		if (nn == 0x65u8) return LoadRegs(x);
+	}
+	return Unknown(op);
+}
+
+#{
+# The ROM doesn't fit in memory above 0x200.
+#}
+class RomTooBig {
+	size: i64;
+	max: i64;
+}
+
+# Wraps an address into the 4 KiB memory.
+fun wrapAddr(a: i64) -> i64 = a & (MEMORY_SIZE - 1);
+
+# ========== MACHINE ===========
+class Chip8 {
+	mem: u8[4096];
+	v: u8[16];
+	i: u16 = 0u16;
+	pc: u16 = 0x200u16;
+	stack: u16[16];
+	sp: i64 = 0;
+	dt: u8 = 0u8;               # delay timer
+	st: u8 = 0u8;               # sound timer
+	display: bool[2048];        # pixel (x, y) at y * 64 + x
+	keys: bool[16];             # set by the frontend
+	screenDirty: bool = true;   # display changed since the frontend last drew it
+	waitingForFrame: bool = false; # DXYN ran this frame (display wait quirk)
+	heldKey: i64 = -1;          # FX0A: key seen pressed, waiting for its release
+	halted: bool = false;
+	haltReason: String;
+
+	#{
+	# Clears the machine and loads the font. Call before `loadRom`.
+	#}
+	fun reset() = {
+		var a: i64 = 0;
+		while (a < MEMORY_SIZE) {
+			mem[a] = 0u8;
+			a = a + 1;
+		}
+		a = 0;
+		while (a < 80) {
+			mem[FONT_START + a] = FONT[a];
+			a = a + 1;
+		}
+		a = 0;
+		while (a < 16) {
+			v[a] = 0u8;
+			keys[a] = false;
+			stack[a] = 0u16;
+			a = a + 1;
+		}
+		a = 0;
+		while (a < SCREEN_W * SCREEN_H) {
+			display[a] = false;
+			a = a + 1;
+		}
+		i = 0u16;
+		pc = PROGRAM_START;
+		sp = 0;
+		dt = 0u8;
+		st = 0u8;
+		screenDirty = true;
+		waitingForFrame = false;
+		heldKey = -1;
+		halted = false;
+		haltReason.clear();
+	}
+
+	#{
+	# Copies `rom` to 0x200.
+	#}
+	fun loadRom(rom: str) -> Result[(), RomTooBig] = {
+		let start = PROGRAM_START as i64;
+		if (rom.length() > MEMORY_SIZE - start) return Err[RomTooBig](RomTooBig(rom.length(), MEMORY_SIZE - start));
+		var k: i64 = 0;
+		while (k < rom.length()) {
+			mem[start + k] = rom[k] as u8;
+			k = k + 1;
+		}
+		return Ok[()](());
+	}
+
+	#{
+	# Fetches, decodes and executes one instruction. Does nothing while halted or
+	# while waiting for the next frame after a draw.
+	#}
+	fun step() = {
+		if (halted or waitingForFrame) return;
+		let op = ((mem[pc as i64] as u16) << 8u16) | (mem[wrapAddr(pc as i64 + 1)] as u16);
+		pc = pc + 2u16;
+		execute(decode(op));
+	}
+
+	#{
+	# Runs `instr` against the machine state.
+	#}
+	fun execute(instr: Instruction) = {
+		match (instr) {
+			case it: Cls = exec(it);
+			case it: Ret = exec(it);
+			case it: Jump = exec(it);
+			case it: Call = exec(it);
+			case it: SkipEqImm = exec(it);
+			case it: SkipNeImm = exec(it);
+			case it: SkipEqReg = exec(it);
+			case it: LoadImm = exec(it);
+			case it: AddImm = exec(it);
+			case it: Move = exec(it);
+			case it: Or = exec(it);
+			case it: And = exec(it);
+			case it: Xor = exec(it);
+			case it: AddReg = exec(it);
+			case it: Sub = exec(it);
+			case it: ShiftRight = exec(it);
+			case it: SubN = exec(it);
+			case it: ShiftLeft = exec(it);
+			case it: SkipNeReg = exec(it);
+			case it: LoadI = exec(it);
+			case it: JumpV0 = exec(it);
+			case it: Random = exec(it);
+			case it: Draw = exec(it);
+			case it: SkipKey = exec(it);
+			case it: SkipNotKey = exec(it);
+			case it: LoadDelay = exec(it);
+			case it: WaitKey = exec(it);
+			case it: SetDelay = exec(it);
+			case it: SetSound = exec(it);
+			case it: AddI = exec(it);
+			case it: LoadFont = exec(it);
+			case it: StoreBcd = exec(it);
+			case it: StoreRegs = exec(it);
+			case it: LoadRegs = exec(it);
+			case it: Unknown = exec(it);
+		};
+	}
+
+	#{
+	# 60 Hz tick: decrements timers and ends the display wait.
+	#}
+	fun tickTimers() = {
+		if (dt > 0u8) dt = dt - 1u8;
+		if (st > 0u8) st = st - 1u8;
+		waitingForFrame = false;
+	}
+
+	fun pixel(x: i64, y: i64) -> bool = display[y * SCREEN_W + x];
+
+	# ---------- helpers ----------
+	fun skipIf(cond: bool) = {
+		if (cond) pc = pc + 2u16;
+	}
+
+	fun halt(reason: String) = {
+		halted = true;
+		haltReason = move reason;
+	}
+
+	# ---------- instructions ----------
+	fun exec(it: Cls) = {
+		var a: i64 = 0;
+		while (a < SCREEN_W * SCREEN_H) {
+			display[a] = false;
+			a = a + 1;
+		}
+		screenDirty = true;
+	}
+
+	fun exec(it: Ret) = {
+		if (sp == 0) {
+			halt("stack underflow (00EE with empty stack)".toString());
+		} else {
+			sp = sp - 1;
+			pc = stack[sp];
+		}
+	}
+
+	fun exec(it: Jump) = {
+		pc = it.nnn;
+	}
+
+	fun exec(it: Call) = {
+		if (sp == STACK_SIZE) {
+			halt("stack overflow (2NNN)".toString());
+		} else {
+			stack[sp] = pc;
+			sp = sp + 1;
+			pc = it.nnn;
+		}
+	}
+
+	fun exec(it: SkipEqImm) = skipIf(v[it.x] == it.nn);
+	fun exec(it: SkipNeImm) = skipIf(v[it.x] != it.nn);
+	fun exec(it: SkipEqReg) = skipIf(v[it.x] == v[it.y]);
+	fun exec(it: SkipNeReg) = skipIf(v[it.x] != v[it.y]);
+
+	fun exec(it: LoadImm) = {
+		v[it.x] = it.nn;
+	}
+
+	fun exec(it: AddImm) = {
+		v[it.x] = v[it.x] + it.nn;
+	}
+
+	fun exec(it: Move) = {
+		v[it.x] = v[it.y];
+	}
+
+	fun exec(it: Or) = {
+		v[it.x] = v[it.x] | v[it.y];
+		v[0xF] = 0u8;
+	}
+
+	fun exec(it: And) = {
+		v[it.x] = v[it.x] & v[it.y];
+		v[0xF] = 0u8;
+	}
+
+	fun exec(it: Xor) = {
+		v[it.x] = v[it.x] ^ v[it.y];
+		v[0xF] = 0u8;
+	}
+
+	fun exec(it: AddReg) = {
+		let sum = (v[it.x] as u16) + (v[it.y] as u16);
+		v[it.x] = sum as u8;
+		v[0xF] = (sum >> 8u16) as u8;
+	}
+
+	fun exec(it: Sub) = {
+		let noBorrow = v[it.x] >= v[it.y];
+		v[it.x] = v[it.x] - v[it.y];
+		v[0xF] = noBorrow as u8;
+	}
+
+	fun exec(it: SubN) = {
+		let noBorrow = v[it.y] >= v[it.x];
+		v[it.x] = v[it.y] - v[it.x];
+		v[0xF] = noBorrow as u8;
+	}
+
+	fun exec(it: ShiftRight) = {
+		let value = v[it.y];
+		v[it.x] = value >> 1u8;
+		v[0xF] = value & 1u8;
+	}
+
+	fun exec(it: ShiftLeft) = {
+		let value = v[it.y];
+		v[it.x] = value << 1u8;
+		v[0xF] = value >> 7u8;
+	}
+
+	fun exec(it: LoadI) = {
+		i = it.nnn;
+	}
+
+	fun exec(it: JumpV0) = {
+		pc = it.nnn + (v[0] as u16);
+	}
+
+	fun exec(it: Random) = {
+		v[it.x] = ((rand() & 0xFF) as u8) & it.nn;
+	}
+
+	fun exec(it: Draw) = {
+		let x0 = (v[it.x] % 64u8) as i64;
+		let y0 = (v[it.y] % 32u8) as i64;
+		var collision = 0u8;
+		var row: i64 = 0;
+		while (row < it.n and y0 + row < SCREEN_H) {
+			let bits = mem[wrapAddr(i as i64 + row)];
+			var col: i64 = 0;
+			while (col < 8 and x0 + col < SCREEN_W) {
+				if (((bits >> (7 - col) as u8) & 1u8) == 1u8) {
+					let idx = (y0 + row) * SCREEN_W + x0 + col;
+					if (display[idx]) collision = 1u8;
+					display[idx] = not display[idx];
+				}
+				col = col + 1;
+			}
+			row = row + 1;
+		}
+		v[0xF] = collision;
+		screenDirty = true;
+		waitingForFrame = true;
+	}
+
+	fun exec(it: SkipKey) = skipIf(keys[(v[it.x] & 0xFu8) as i64]);
+	fun exec(it: SkipNotKey) = skipIf(not keys[(v[it.x] & 0xFu8) as i64]);
+
+	fun exec(it: LoadDelay) = {
+		v[it.x] = dt;
+	}
+
+	# Waits for a key to be pressed and then released (COSMAC VIP behaviour).
+	fun exec(it: WaitKey) = {
+		if (heldKey == -1) {
+			var k: i64 = 0;
+			while (k < 16 and heldKey == -1) {
+				if (keys[k]) heldKey = k;
+				k = k + 1;
+			}
+			pc = pc - 2u16;
+		} else if (keys[heldKey]) {
+			pc = pc - 2u16;
+		} else {
+			v[it.x] = heldKey as u8;
+			heldKey = -1;
+		}
+	}
+
+	fun exec(it: SetDelay) = {
+		dt = v[it.x];
+	}
+
+	fun exec(it: SetSound) = {
+		st = v[it.x];
+	}
+
+	fun exec(it: AddI) = {
+		i = i + (v[it.x] as u16);
+	}
+
+	fun exec(it: LoadFont) = {
+		i = (FONT_START + ((v[it.x] & 0xFu8) as i64) * 5) as u16;
+	}
+
+	fun exec(it: StoreBcd) = {
+		let value = v[it.x];
+		mem[wrapAddr(i as i64)] = value / 100u8;
+		mem[wrapAddr(i as i64 + 1)] = (value / 10u8) % 10u8;
+		mem[wrapAddr(i as i64 + 2)] = value % 10u8;
+	}
+
+	fun exec(it: StoreRegs) = {
+		var r: i64 = 0;
+		while (r <= it.x) {
+			mem[wrapAddr(i as i64 + r)] = v[r];
+			r = r + 1;
+		}
+		i = i + (it.x as u16) + 1u16;
+	}
+
+	fun exec(it: LoadRegs) = {
+		var r: i64 = 0;
+		while (r <= it.x) {
+			v[r] = mem[wrapAddr(i as i64 + r)];
+			r = r + 1;
+		}
+		i = i + (it.x as u16) + 1u16;
+	}
+
+	fun exec(it: Unknown) = {
+		halt(f"unknown opcode {it.op} at {pc - 2u16}");
+	}
 }

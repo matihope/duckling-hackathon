@@ -1,0 +1,208 @@
+#{
+# Runs a `Chip8` in the terminal: 60 Hz frames, keypad from stdin, redraw only
+# when the machine wrote to the screen, terminal bell for the sound timer.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.chip8.Chip8;
+import src.tui.*;
+import src.tui.terminal.*;
+import src.tui.render.*;
+import src.errors.*;
+
+# ========== TIMING ===========
+const FRAME_NS: i64 = 16666667;      # 60 Hz
+const CYCLES_PER_FRAME: i64 = 11;    # ~660 instructions per second
+# Terminals report key presses but not releases, so a key counts as held
+# for this long after its last byte (auto-repeat keeps refreshing it).
+const KEY_HOLD_NS: i64 = 300000000;
+
+# ========== KEYPAD ===========
+# Character at index k is the keyboard key for CHIP-8 key k:
+#   1 2 3 C      1 2 3 4
+#   4 5 6 D  <-  q w e r
+#   7 8 9 E      a s d f
+#   A 0 B F      z x c v
+const KEY_CHARS: str = "x123qweasdzc4rfv";
+const CTRL_C: u8 = 3u8;
+const ESC_BYTE: u8 = 27u8;
+const STATUS_ROWS: i64 = 1;
+
+fun nowNs() -> i64 = {
+	var ts: Timespec;
+	clock_gettime(CLOCK_MONOTONIC, &ts as cptr mut Timespec);
+	return ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+fun sleepNs(ns: i64) = {
+	if (ns > 0) {
+		var req = Timespec(ns / 1000000000, ns % 1000000000);
+		var rem: Timespec;
+		nanosleep(&req as cptr Timespec, &rem as cptr mut Timespec);
+	}
+}
+
+#{
+# CHIP-8 key for keyboard byte `b`, or -1.
+#}
+fun keyFor(b: u8) -> i64 = {
+	var c = b as char;
+	if ('A' <= c <= 'Z') c = 'a' + (c - 'A');
+	var k: i64 = 0;
+	var found: i64 = -1;
+	while (found == -1 and k < 16) {
+		if (KEY_CHARS[k] == c) found = k;
+		k = k + 1;
+	}
+	return found;
+}
+
+class Keypad {
+	heldUntil: i64[16];  # ns timestamp until which each key counts as pressed
+	quit: bool = false;
+
+	#{
+	# Drains stdin: refreshes pressed keys, notices Ctrl-C and a lone Esc.
+	# Escape sequences (arrows etc.) are dropped.
+	#}
+	fun poll(term: ref Terminal, now: i64) = {
+		var next = term.readByte();
+		while (not next.isEmpty()) {
+			let b = next.value();
+			next = term.readByte();
+			if (b == CTRL_C) quit = true;
+			if (b == ESC_BYTE) {
+				if (next.isEmpty()) quit = true;
+				while (not next.isEmpty()) next = term.readByte();
+			}
+			let k = keyFor(b);
+			if (k >= 0) heldUntil[k] = now + KEY_HOLD_NS;
+		}
+	}
+
+	fun apply(chip: ref Chip8, now: i64) = {
+		var k: i64 = 0;
+		while (k < 16) {
+			chip.keys[k] = now < heldUntil[k];
+			k = k + 1;
+		}
+	}
+}
+
+#{
+# Failed with `Halted` when the machine stopped, succeeded otherwise.
+#}
+fun haltResult(chip: ref Chip8) -> AppResult = {
+	if (chip.halted) return failed(Halted(copy chip.haltReason));
+	return succeeded();
+}
+
+# ========== TERMINAL RUN ===========
+
+fun drawStatus(term: ref Terminal, title: str) = {
+	var out = "".toString();
+	appendMoveTo(&out, 1, 1);
+	out.append(title);
+	out.append("  |  keys: 1234 qwer asdf zxcv  |  Ctrl-C / Esc: quit");
+	term.writeAll(out.asSlice());
+}
+
+fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) -> AppResult = {
+	var keypad: Keypad;
+	var beeping = false;
+	let bel = 7u8 as char;
+	drawStatus(term, title);
+	chip.screenDirty = true;
+
+	var deadline = nowNs();
+	while (not keypad.quit and not chip.halted) {
+		let now = nowNs();
+		keypad.poll(term, now);
+		keypad.apply(chip, now);
+
+		var n: i64 = 0;
+		while (n < CYCLES_PER_FRAME) {
+			chip.step();
+			n = n + 1;
+		}
+		chip.tickTimers();
+
+		if (chip.screenDirty) {
+			let frame = renderFrame(&chip.display, at);
+			term.writeAll(frame.asSlice());
+			chip.screenDirty = false;
+		}
+
+		let sound = chip.st > 0u8;
+		if (sound and not beeping) {
+			var out = "".toString();
+			out.append(bel);
+			term.writeAll(out.asSlice());
+		}
+		beeping = sound;
+
+		deadline = deadline + FRAME_NS;
+		sleepNs(deadline - nowNs());
+	}
+	return haltResult(chip);
+}
+
+fun runPlaced(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) -> AppResult = {
+	return match (placeCentered(size, STATUS_ROWS)) {
+		case at: Placement = runFrames(term, chip, title, at);
+		case small: TooSmall = failed(small);
+	};
+}
+
+fun runInTerminal(term: ref Terminal, chip: ref Chip8, title: str) -> AppResult = {
+	return match (term.size()) {
+		case size: Winsize = runPlaced(term, chip, title, size);
+		case err: TerminalError = failed(err);
+	};
+}
+
+#{
+# Runs `chip` interactively until the user quits or the machine halts.
+# The terminal is restored (by `Terminal`'s destructor) before this returns.
+#}
+fun runInteractive(chip: ref Chip8, title: str) -> AppResult = {
+	return match (Terminal.open()) {
+		case term: Terminal = runInTerminal(&term, chip, title);
+		case err: TerminalError = failed(err);
+	};
+}
+
+# ========== HEADLESS ===========
+
+#{
+# Runs `frames` frames with no input and prints the screen as `#`/`.` rows.
+#}
+fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
+	var f: i64 = 0;
+	while (f < frames and not chip.halted) {
+		var n: i64 = 0;
+		while (n < CYCLES_PER_FRAME) {
+			chip.step();
+			n = n + 1;
+		}
+		chip.tickTimers();
+		f = f + 1;
+	}
+	var out = "".toString();
+	var y: i64 = 0;
+	while (y < 32) {
+		var x: i64 = 0;
+		while (x < 64) {
+			if (chip.pixel(x, y)) {
+				out.append('#');
+			} else {
+				out.append('.');
+			}
+			x = x + 1;
+		}
+		out.append('\n');
+		y = y + 1;
+	}
+	print(&out);
+	return haltResult(chip);
+}

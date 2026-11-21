@@ -10,6 +10,7 @@ import src.testing.checkStr;
 import src.testing.contains;
 import src.testing.hex;
 import src.utils.split_nul;
+import cpu.addCpuTests;
 
 fun testU8Wraps() = {
 	let max = 255u8;
@@ -41,16 +42,12 @@ fun testSplitNul() = {
 	checkStr(parts.at(1).asSlice(), "cd", "second part");
 }
 
-fun testFailing() = {
-	check(false == true, "Failing");
-}
-
 fun allTests() -> List[TestCase] = {
 	var tests: List[TestCase];
 	tests.push(TestCase("lang.u8_wraps", testU8Wraps));
 	tests.push(TestCase("testing.hex", testHex));
 	tests.push(TestCase("testing.contains", testContains));
 	tests.push(TestCase("utils.split_nul", testSplitNul));
-	tests.push(TestCase("failing", testFailing));
+	addCpuTests(&tests);
 	return tests;
 }

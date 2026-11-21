@@ -1,0 +1,35 @@
+#{
+# Everything that can stop the emulator, as one variant, plus `AppResult`.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.result.Ok;
+import src.result.Err;
+import src.result.Result;
+import src.chip8.RomTooBig;
+import src.tui.terminal.TerminalError;
+import src.tui.render.TooSmall;
+
+#{
+# The ROM file couldn't be read.
+#}
+class ReadFailed {
+	path: String;
+}
+
+#{
+# The CHIP-8 stopped on an instruction it can't run.
+#}
+class Halted {
+	reason: String;
+}
+
+const AppError = ReadFailed | RomTooBig | TerminalError | TooSmall | Halted;
+const AppResult = Result[(), AppError];
+
+fun succeeded() -> AppResult = Ok[()](());
+
+#{
+# Wraps `e` (any single error class converts to `AppError`) into a failed result.
+#}
+fun failed(e: AppError) -> AppResult = Err[AppError](move e);

@@ -1,0 +1,22 @@
+#{
+# Generic result type: `Result[T, E]` is either `Ok[T]` or `Err[E]`.
+#
+#     fun parse(s: str) -> Result[i64, ParseError] = { ... return Ok[i64](42); }
+#     match (r) { case v: Ok[i64] = ...; case e: ref Err[ParseError] = ...; }
+#
+# For `E` with an owning payload (e.g. a `String`), match a result through `ref`
+# and bind `ref Err[E]`: a field can't be moved out of a match binding.
+#}
+
+template(T: type)
+class Ok {
+	value: T;
+}
+
+template(E: type)
+class Err {
+	error: E;
+}
+
+template(T: type, E: type)
+const Result = Ok[T] | Err[E];
