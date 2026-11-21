@@ -54,3 +54,14 @@
 29) `const` z klasą zwróconą z funkcji (`const QQ: Q = q();`) też zawiesza duckc, jak 14).
 30) Zła sygnatura `main`, np. `fun main(argc: i64, argv: manyptr cptr char) -> i64`, wywala kompilator: `terminate called after throwing an instance of 'std::bad_expected_access<...>'` zamiast błędu.
 31) `for (x in ...)` działa tylko dla statycznych tablic: dla `List`/`str` daje `[Feature not implemented] for statements for non-array type`. Zmienna pętli to kopia, więc `for (b in mem) b = 0u8;` nie zeruje tablicy.
+32) Tablica `bool[N]` jako pole klasy psuje układ struktury i duckc pada na asercji w backendzie LLVM. Frontend liczy `bool[N]` jako N bitów, LLVM jako N bajtów. Dotyczy każdego N (sprawdzone 2, 16, 2048) i każdej pozycji pola; `u8[N]` w tym samym miejscu oraz lokalne `var x: bool[N];` działają.
+    ```
+    class A { flags: bool[16]; after: i64 = 7; }
+    fun main() -> i64 = { var a: A; a.flags[3] = true; return a.after; }
+    ```
+    ```
+    Assertion failed: `expected_offset == actual_offset`
+    LLVM struct layout mismatch for class '...A' at field index 1: expected offset 8B, got 16B
+    ```
+    Gdy tablica jest ostatnim polem: `LLVM struct size mismatch for class ...`. Obejście: `u8[N]` z wartościami 0/1 (`Chip8.display`, `Chip8.keys`); dostęp przez `pixel()` i `setKey()`.
+33) Missing return statement nie daje source posititon
