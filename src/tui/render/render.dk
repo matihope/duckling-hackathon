@@ -1,0 +1,142 @@
+#{
+# Draws the CHIP-8 screen (64x32 monochrome pixels) into a terminal.
+#
+# Each character cell shows two pixels stacked vertically using the half-block
+# characters, so the screen takes 64x16 cells, plus a one-cell border:
+#
+#	top bottom  glyph  UTF-8
+#	 0    0      ' '   20
+#	 1    0      '▀'   E2 96 80
+#	 0    1      '▄'   E2 96 84
+#	 1    1      '█'   E2 96 88
+#}
+import core.builtins.*;
+import core.containers.*;
+import tui.*;
+import tui.terminal.*;
+
+# ========== SCREEN GEOMETRY ===========
+const SCREEN_WIDTH: i64 = 64;
+const SCREEN_HEIGHT: i64 = 32;
+
+#{
+# The CHIP-8 display: pixel (x, y) is at index `y * SCREEN_WIDTH + x`.
+# Same type as the emulator's `display: bool[2048]`.
+#}
+const Framebuffer = bool[SCREEN_WIDTH * SCREEN_HEIGHT];
+
+#{
+# Terminal cells taken by the screen together with its border.
+#}
+const FRAME_COLS: i64 = SCREEN_WIDTH + 2;
+const FRAME_ROWS: i64 = SCREEN_HEIGHT / 2 + 2;
+
+# ========== PLACEMENT ===========
+
+#{
+# Where the frame goes: 1-based terminal row and column of its top-left border corner.
+#}
+class Placement {
+	public row: i64;
+	public col: i64;
+}
+
+#{
+# The terminal is smaller than `FRAME_COLS` x `FRAME_ROWS`.
+#}
+class TooSmall {
+	public cols: i64; # Columns the terminal has
+	public rows: i64; # Rows the terminal has
+
+	#{
+	# `terminal too small: 40x12, need 66x18`
+	#}
+	public fun message() -> String = {
+		var msg = "terminal too small: ".toString();
+		msg.append(cols.toString());
+		msg.append('x');
+		msg.append(rows.toString());
+		msg.append(", need ");
+		msg.append(FRAME_COLS.toString());
+		msg.append('x');
+		msg.append(FRAME_ROWS.toString());
+		return msg;
+	}
+}
+
+#{
+# Centres the frame in a terminal of `size`, leaving `reserved_rows` free at the
+# top (e.g. for a status line).
+#}
+fun placeCentered(size: Winsize, reserved_rows: i64) -> Placement | TooSmall = {
+	let cols = size.ws_col as i64;
+	let rows = size.ws_row as i64;
+	if (cols < FRAME_COLS or rows < FRAME_ROWS + reserved_rows) return TooSmall(cols, rows);
+	let free_rows = rows - reserved_rows - FRAME_ROWS;
+	return Placement(reserved_rows + free_rows / 2 + 1, (cols - FRAME_COLS) / 2 + 1);
+}
+
+# ========== DRAWING ===========
+
+#{
+# Whether pixel (`x`, `y`) is turned on.
+#}
+fun pixelAt(fb: ref Framebuffer, x: i64, y: i64) -> bool = fb[y * SCREEN_WIDTH + x];
+
+#{
+# The half-block character showing the `top` and `bottom` pixels of one cell.
+#}
+fun halfBlock(top: bool, bottom: bool) -> str = {
+	if (top and bottom) return "█";
+	if (top) return "▀";
+	if (bottom) return "▄";
+	return " ";
+}
+
+#{
+# Appends one horizontal border line: `left`, SCREEN_WIDTH times `─`, `right`.
+#}
+fun appendBorderLine(out: ref mut String, left: str, right: str) = {
+	out.append(left);
+	var x: i64 = 0;
+	while (x < SCREEN_WIDTH) {
+		out.append("─");
+		x = x + 1;
+	}
+	out.append(right);
+}
+
+#{
+# Appends the whole frame (border and all 16 lines of pixels) at `at`.
+# Every line starts with its own cursor move, so nothing depends on `\r\n`
+# or on what was on the screen before.
+#}
+fun appendFrame(out: ref mut String, fb: ref Framebuffer, at: Placement) = {
+	appendMoveTo(out, at.row, at.col);
+	appendBorderLine(out, "┌", "┐");
+
+	var line: i64 = 0;
+	while (line < SCREEN_HEIGHT / 2) {
+		appendMoveTo(out, at.row + 1 + line, at.col);
+		out.append("│");
+		var x: i64 = 0;
+		while (x < SCREEN_WIDTH) {
+			out.append(halfBlock(pixelAt(fb, x, line * 2), pixelAt(fb, x, line * 2 + 1)));
+			x = x + 1;
+		}
+		out.append("│");
+		line = line + 1;
+	}
+
+	appendMoveTo(out, at.row + FRAME_ROWS - 1, at.col);
+	appendBorderLine(out, "└", "┘");
+}
+
+#{
+# The frame as a ready-to-write `String`.
+#}
+fun renderFrame(fb: ref Framebuffer, at: Placement) -> String = {
+	var out = "".toString();
+	appendFrame(&out, fb, at);
+	return out;
+}
