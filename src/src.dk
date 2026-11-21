@@ -1,13 +1,18 @@
 import core.builtins.*;
 import core.containers.*;
-import utils.read_cmdline;
-import utils.read_file;
-import utils.exit_with_error;
+import utils.readCmdline;
+import utils.readFile;
+import utils.exitWithError;
 import testing.runTests;
 import testing.strEq;
 import tests.allTests;
 import chip8.Chip8;
+import chip8.newChip8;
 import chip8.RomTooBig;
+import chip8.Halted;
+import chip8.platform.Platform;
+import chip8.platform.cosmacVip;
+import chip8.platform.superChip;
 import emulator.runInteractive;
 import emulator.runHeadless;
 import errors.*;
@@ -20,36 +25,94 @@ import chip8.octo.OctoError;
 
 const USAGE: str = "usage: duckling-hackathon <rom.ch8 | program.8o> [--chip8 | --schip] [--dump <frames>] | -t [filter]";
 
-# Non-negative decimal from `s`, or -1.
-fun parseCount(s: str) -> i64 = {
-	if (s.length() == 0) return -1;
+# ========== COMMAND LINE ===========
+
+#{
+# How to run a ROM.
+#}
+class Options {
+	platform: Platform = superChip(); # SUPER-CHIP unless --chip8
+	dumpFrames: ?i64 = none; # --dump N: run headless for N frames, print the screen
+}
+
+#{
+# `-t [filter]`: run the unit tests whose names contain `filter`.
+#}
+class RunTests {
+	filter: ?str;
+}
+
+#{
+# `<path> [options]`: run a ROM or Octo source.
+#}
+class RunFile {
+	path: str;
+	opts: Options;
+}
+
+const Command = RunTests | RunFile;
+
+#{
+# Non-negative decimal `s`, if it is one.
+#}
+fun parseCount(s: str) -> ?i64 = {
+	if (s.length() == 0) return none;
 	var value: i64 = 0;
 	var k: i64 = 0;
 	while (k < s.length()) {
-		if (s[k] < '0' or s[k] > '9') return -1;
+		if (s[k] < '0' or s[k] > '9') return none;
 		value = value * 10 + (s[k] - '0') as i64;
 		k = k + 1;
 	}
 	return value;
 }
 
-#{
-# Command-line options after the ROM path.
-#}
-class Options {
-	dumpFrames: i64 = -1; # --dump N: run headless for N frames, print the screen
-	superChip: bool = true; # SUPER-CHIP unless --chip8
+fun parseOptions(args: ref mut List[String]) -> ?Options = {
+	var opts = Options(superChip(), none);
+	var k: i64 = 2;
+	while (k < args.length()) {
+		let arg = args.at(k).asSlice();
+		if (strEq(arg, "--chip8")) {
+			opts.platform = cosmacVip();
+		} else if (strEq(arg, "--schip")) {
+			opts.platform = superChip();
+		} else if (strEq(arg, "--dump") and k + 1 < args.length()) {
+			k = k + 1;
+			opts.dumpFrames = parseCount(args.at(k).asSlice());
+			if (opts.dumpFrames.isEmpty()) return none;
+		} else {
+			return none;
+		}
+		k = k + 1;
+	}
+	return opts;
 }
 
+#{
+# The command `args` (argv[0] first) asks for; none on a usage error.
+#}
+fun parseArgs(args: ref mut List[String]) -> ?Command = {
+	if (args.length() < 2) return none;
+	let first = args.at(1).asSlice();
+	if (strEq(first, "-t")) {
+		if (args.length() == 2) return RunTests(none) as Command;
+		if (args.length() == 3) return RunTests(args.at(2).asSlice()) as Command;
+		return none;
+	}
+	let opts = parseOptions(args);
+	if (opts.isEmpty()) return none;
+	return RunFile(first, opts.value()) as Command;
+}
+
+# ========== RUNNING ===========
+
 fun start(chip: ref Chip8, path: str, opts: Options) -> AppResult = {
-	if (opts.dumpFrames >= 0) return runHeadless(chip, opts.dumpFrames);
+	if (opts.dumpFrames.nonEmpty()) return runHeadless(chip, opts.dumpFrames.value());
 	return runInteractive(chip, path);
 }
 
 fun runRom(rom: ref String, path: str, opts: Options) -> AppResult = {
-	var chip: Chip8;
-	chip.superChip = opts.superChip;
-	chip.reset();
+	var chip = newChip8(opts.platform);
 	return match (chip.loadRom(rom.asSlice())) {
 		case _: Ok[()] = start(&chip, path, opts);
 		case e: Err[RomTooBig] = failed(e.error);
@@ -88,11 +151,13 @@ fun runContent(content: ref String, path: str, opts: Options) -> AppResult = {
 }
 
 fun runFile(path: str, opts: Options) -> AppResult = {
-	return match (read_file(path)) {
+	return match (readFile(path)) {
 		case content: String = runContent(&content, path, opts);
 		case _ = failed(ReadFailed(path.toString()));
 	};
 }
+
+# ========== EXIT CODES ===========
 
 fun fail(message: String) -> i64 = {
 	print(f"Error: {message}\n");
@@ -113,44 +178,29 @@ fun report(error: ref AppError) -> i64 = {
 	};
 }
 
-fun exitCode(result: ref AppResult) -> i64 = {
-	return match (result) {
-		case _: Ok[()] = 0i64;
+fun exitCode(result: AppResult) -> i64 = {
+	return match (&result) {
+		case _: ref Ok[()] = 0i64;
 		case e: ref Err[AppError] = report(&e.error);
 	};
 }
 
+fun runTestsMatching(filter: ?str) -> i64 = {
+	var tests = allTests();
+	return runTests(&tests, filter);
+}
+
+fun execute(command: Command) -> i64 = {
+	return match (command) {
+		case t: RunTests = runTestsMatching(t.filter);
+		case r: RunFile = exitCode(runFile(r.path, r.opts));
+	};
+}
+
 fun main() = {
-	var args = read_cmdline();
-	if (args.isEmpty()) exit_with_error("Could not read /proc/self/cmdline");
-	if (args.value().length() < 2i64) exit_with_error(USAGE);
-
-	if (strEq(args.value().at(1i64).asSlice(), "-t")) {
-		var tests = allTests();
-		if (args.value().length() > 2i64) return runTests(&tests, args.value().at(2i64).asSlice());
-		return runTests(&tests, none);
-	}
-
-	let path = args.value().at(1i64).asSlice();
-	var opts: Options;
-	var k: i64 = 2;
-	while (k < args.value().length()) {
-		let arg = args.value().at(k).asSlice();
-		if (strEq(arg, "--chip8")) {
-			opts.superChip = false;
-			k = k + 1;
-		} else if (strEq(arg, "--schip")) {
-			opts.superChip = true;
-			k = k + 1;
-		} else if (strEq(arg, "--dump") and k + 1 < args.value().length()) {
-			opts.dumpFrames = parseCount(args.value().at(k + 1).asSlice());
-			if (opts.dumpFrames < 0) exit_with_error(USAGE);
-			k = k + 2;
-		} else {
-			exit_with_error(USAGE);
-		}
-	}
-
-	var result = runFile(path, opts);
-	return exitCode(&result);
+	var args = readCmdline();
+	if (args.isEmpty()) exitWithError("could not read /proc/self/cmdline");
+	let command = parseArgs(args.value());
+	if (command.isEmpty()) exitWithError(USAGE);
+	return execute(command.value());
 }

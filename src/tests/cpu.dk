@@ -4,95 +4,82 @@
 import core.builtins.*;
 import core.containers.*;
 import src.chip8.Chip8;
+import src.chip8.newChip8;
+import src.chip8.platform.cosmacVip;
 import src.chip8.octo.octo;
 import src.testing.TestCase;
 import src.testing.check;
 import src.testing.checkEq;
 
-fun steps(c: ref Chip8, n: i64) = {
-	var k: i64 = 0;
-	while (k < n) {
-		c.step();
-		k = k + 1;
-	}
-}
-
 fun testAddImmWrapsWithoutFlag() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 0xFF  v0 += 2");
-	steps(&c, 2);
+	c.run(2);
 	checkEq(c.v[0], 1, "V0");
 	checkEq(c.v[0xF], 0, "VF untouched");
 }
 
 fun testAddRegCarry() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 0xFF  v1 := 2  v0 += v1  v2 := 1  v2 += v2");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[0], 1, "V0 wraps");
 	checkEq(c.v[0xF], 1, "carry");
-	steps(&c, 2);
+	c.run(2);
 	checkEq(c.v[2], 2, "V2");
 	checkEq(c.v[0xF], 0, "no carry");
 }
 
 fun testSubAndSubN() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo(
 		"c",
 		": main  v0 := 5  v1 := 7  v0 -= v1  v2 := 7  v3 := 5  v2 -= v3  v4 := 5  v5 := 7  v4 =- v5"
 	);
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[0], 0xFE, "5 - 7");
 	checkEq(c.v[0xF], 0, "borrow -> VF 0");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[2], 2, "7 - 5");
 	checkEq(c.v[0xF], 1, "no borrow -> VF 1");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[4], 2, "SUBN 7 - 5");
 	checkEq(c.v[0xF], 1, "SUBN no borrow");
 }
 
 fun testShiftsUseVy() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v1 := 0x81  v0 >>= v1  v2 <<= v1");
-	steps(&c, 2);
+	c.run(2);
 	checkEq(c.v[0], 0x40, "SHR result from VY");
 	checkEq(c.v[0xF], 1, "SHR shifted-out bit");
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.v[2], 0x02, "SHL result from VY");
 	checkEq(c.v[0xF], 1, "SHL shifted-out bit");
 }
 
 fun testFlagWrittenAfterResult() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  vf := 0xFF  v1 := 1  vf += v1");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[0xF], 1, "VF holds carry, not sum");
 }
 
 fun testLogicResetsVf() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  vf := 1  v0 := 0x0C  v1 := 0x0A  v0 |= v1");
-	steps(&c, 4);
+	c.run(4);
 	checkEq(c.v[0], 0x0E, "OR");
 	checkEq(c.v[0xF], 0, "VF reset");
 }
 
 fun testCallRet() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  sub  v1 := 7  : spin  jump spin  : sub  v0 := 5  return");
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.pc, 0x206, "pc after CALL");
 	checkEq(c.sp, 1, "sp after CALL");
-	steps(&c, 4);
+	c.run(4);
 	checkEq(c.v[0], 5, "subroutine ran");
 	checkEq(c.v[1], 7, "returned");
 	checkEq(c.pc, 0x204, "spinning on JP");
@@ -100,38 +87,35 @@ fun testCallRet() = {
 }
 
 fun testSkips() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  if v0 != 0 then  v1 := 1  if v0 == 0 then  v2 := 2");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.v[1], 0, "SE skipped");
 	checkEq(c.v[2], 2, "SNE did not skip");
 }
 
 fun testBcdAndMemory() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 123  i := 0x300  bcd v0  load v2  i := 0x310  save v2");
-	steps(&c, 3);
+	c.run(3);
 	checkEq(c.mem[0x300], 1, "hundreds");
 	checkEq(c.mem[0x301], 2, "tens");
 	checkEq(c.mem[0x302], 3, "ones");
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.v[2], 3, "loaded V2");
 	checkEq(c.i, 0x303, "FX65 advances I");
-	steps(&c, 2);
+	c.run(2);
 	checkEq(c.mem[0x312], 3, "stored V2");
 	checkEq(c.i, 0x313, "FX55 advances I");
 }
 
 fun testDrawCollisionAndDisplayWait() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	c.screenDirty = false;
 	expand octo("c", ": main  i := hex v0  sprite v1 v2 5  sprite v1 v2 5");
-	steps(&c, 1);
+	c.run(1);
 	check(not c.screenDirty, "LD F doesn't touch the screen");
-	steps(&c, 5);
+	c.run(5);
 	check(c.screenDirty, "draw marks screen dirty");
 	check(c.pixel(0, 0), "font 0 top-left pixel");
 	check(c.pixel(3, 0), "font 0 top-right pixel");
@@ -139,66 +123,61 @@ fun testDrawCollisionAndDisplayWait() = {
 	checkEq(c.v[0xF], 0, "no collision");
 	checkEq(c.pc, 0x204, "display wait blocks further steps");
 	c.tickTimers();
-	steps(&c, 1);
+	c.run(1);
 	check(not c.pixel(0, 0), "second draw erased");
 	checkEq(c.v[0xF], 1, "collision");
 }
 
 fun testDrawClipsAndWrapsStart() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  i := 0x300  v1 := 62  sprite v1 v0 1  v1 := 65  sprite v1 v0 1");
 	c.mem[0x300] = 0xFFu8;
-	steps(&c, 3);
+	c.run(3);
 	check(c.pixel(62, 0) and c.pixel(63, 0), "drawn up to the edge");
 	check(not c.pixel(0, 0), "clipped, not wrapped");
 	c.tickTimers();
-	steps(&c, 2);
+	c.run(2);
 	check(c.pixel(1, 0), "x 65 wraps to 1");
 }
 
 fun testTimers() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 3  delay := v0  buzzer := v0  v1 := delay");
-	steps(&c, 3);
+	c.run(3);
 	c.tickTimers();
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.v[1], 2, "DT decremented");
 	checkEq(c.st, 2, "ST decremented");
 }
 
 fun testWaitKeyNeedsRelease() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := key");
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.pc, 0x200, "waits with no key");
 	c.keys[5] = true;
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.pc, 0x200, "still waits while held");
 	c.keys[5] = false;
-	steps(&c, 1);
+	c.run(1);
 	checkEq(c.pc, 0x202, "continues on release");
 	checkEq(c.v[0], 5, "key stored");
 }
 
 fun testSkipKey() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  v0 := 0xA  if v0 -key then  v1 := 1  if v0 key then  v2 := 1");
 	c.keys[0xA] = true;
-	steps(&c, 4);
+	c.run(4);
 	checkEq(c.v[1], 0, "SKP skipped");
 	checkEq(c.v[2], 1, "SKNP didn't skip");
 }
 
 fun testUnknownOpcodeHalts() = {
-	var c: Chip8;
-	c.reset();
+	var c = newChip8(cosmacVip());
 	expand octo("c", ": main  0x01 0x23");
-	steps(&c, 2);
-	check(c.halted, "halted");
+	c.run(2);
+	check(not c.running(), "halted");
 	checkEq(c.pc, 0x202, "no further steps");
 }
 

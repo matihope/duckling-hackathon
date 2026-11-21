@@ -1,0 +1,244 @@
+#{
+# The instruction set as data. `opcodes()` lists every instruction as an opcode
+# pattern and a name; at compile time this generates one class per instruction,
+# the `Instruction` variant and `decode` (all in `isa.instructions`), and the
+# dispatch `match` of `Chip8.execute` (`expand dispatch("instr")`), which calls
+# `exec(it)` for each.
+#
+# Opcode letters: hex digits must match; X and Y are register nibbles (field
+# `x`/`y: i64`); a trailing N, NN or NNN is an immediate (`n: i64`, `nn: u8`,
+# `nnn: u16`).
+#}
+import core.builtins.*;
+import core.containers.*;
+
+class Opcode {
+	bits: str;
+	name: str;
+	superChip: bool; # only valid on a SUPER-CHIP platform
+}
+
+fun base(t: ref mut List[Opcode], bits: str, name: str) = t.push(Opcode(bits, name, false));
+fun schip(t: ref mut List[Opcode], bits: str, name: str) = t.push(Opcode(bits, name, true));
+
+fun opcodes() -> List[Opcode] = {
+	var t: List[Opcode];
+	base(&t, "00E0", "Cls");
+	base(&t, "00EE", "Ret");
+	schip(&t, "00CN", "ScrollDown");
+	schip(&t, "00FB", "ScrollRight");
+	schip(&t, "00FC", "ScrollLeft");
+	schip(&t, "00FD", "Exit");
+	schip(&t, "00FE", "Lores");
+	schip(&t, "00FF", "Hires");
+	base(&t, "1NNN", "Jump");
+	base(&t, "2NNN", "Call");
+	base(&t, "3XNN", "SkipEqImm");
+	base(&t, "4XNN", "SkipNeImm");
+	base(&t, "5XY0", "SkipEqReg");
+	base(&t, "6XNN", "LoadImm");
+	base(&t, "7XNN", "AddImm");
+	base(&t, "8XY0", "Move");
+	base(&t, "8XY1", "Or");
+	base(&t, "8XY2", "And");
+	base(&t, "8XY3", "Xor");
+	base(&t, "8XY4", "AddReg");
+	base(&t, "8XY5", "Sub");
+	base(&t, "8XY6", "ShiftRight");
+	base(&t, "8XY7", "SubN");
+	base(&t, "8XYE", "ShiftLeft");
+	base(&t, "9XY0", "SkipNeReg");
+	base(&t, "ANNN", "LoadI");
+	base(&t, "BNNN", "JumpOffset");
+	base(&t, "CXNN", "Random");
+	base(&t, "DXYN", "Draw");
+	base(&t, "EX9E", "SkipKey");
+	base(&t, "EXA1", "SkipNotKey");
+	base(&t, "FX07", "LoadDelay");
+	base(&t, "FX0A", "WaitKey");
+	base(&t, "FX15", "SetDelay");
+	base(&t, "FX18", "SetSound");
+	base(&t, "FX1E", "AddI");
+	base(&t, "FX29", "LoadFont");
+	schip(&t, "FX30", "LoadBigFont");
+	base(&t, "FX33", "StoreBcd");
+	base(&t, "FX55", "StoreRegs");
+	base(&t, "FX65", "LoadRegs");
+	schip(&t, "FX75", "SaveFlags");
+	schip(&t, "FX85", "LoadFlags");
+	return t;
+}
+
+#{
+# Any opcode not in the table.
+#}
+class Unknown {
+	op: u16;
+}
+
+# ========== GENERATORS (compile time) ===========
+
+fun isHexDigit(c: char) -> bool = ('0' <= c <= '9') or ('A' <= c <= 'F');
+fun hexDigitValue(c: char) -> i64 = if '0' <= c
+	<= '9' then (c - '0') as i64 else (c - 'A') as i64 + 10;
+
+#{
+# `0x1234u16`.
+#}
+fun appendU16(out: ref mut String, v: i64) = {
+	let digits = "0123456789ABCDEF";
+	out.append("0x");
+	var shift: i64 = 12;
+	while (shift >= 0) {
+		out.append(digits[(v >> shift) & 15]);
+		shift = shift - 4;
+	}
+	out.append("u16");
+}
+
+#{
+# Number of trailing `N`s: the width of the immediate in nibbles.
+#}
+fun immediateNibbles(bits: str) -> i64 = {
+	var count: i64 = 0;
+	while (count < 3 and bits[3 - count] == 'N') count = count + 1;
+	return count;
+}
+
+#{
+# `(mask, value)`: `op & mask == value` for opcodes matching `bits`.
+#}
+fun maskAndValue(bits: str) -> (i64, i64) = {
+	var mask: i64 = 0;
+	var value: i64 = 0;
+	var k: i64 = 0;
+	while (k < 4) {
+		let fixed = isHexDigit(bits[k]);
+		mask = mask * 16 + (if fixed then 15i64 else 0i64);
+		value = value * 16 + (if fixed then hexDigitValue(bits[k]) else 0i64);
+		k = k + 1;
+	}
+	return (mask, value);
+}
+
+#{
+# `class Draw { x: i64; y: i64; n: i64; }` for every opcode.
+#}
+fun appendClasses(out: ref mut String, table: ref List[Opcode]) = {
+	var k: i64 = 0;
+	while (k < table.length()) {
+		let bits = table.at(k).bits;
+		out.append("class ");
+		out.append(table.at(k).name);
+		out.append(" {");
+		if (bits[1] == 'X') out.append(" x: i64;");
+		if (bits[2] == 'Y') out.append(" y: i64;");
+		let width = immediateNibbles(bits);
+		if (width == 1) out.append(" n: i64;");
+		if (width == 2) out.append(" nn: u8;");
+		if (width == 3) out.append(" nnn: u16;");
+		out.append(" }\n");
+		k = k + 1;
+	}
+}
+
+#{
+# `const Instruction = Cls | Ret | ... | Unknown;`
+#}
+fun appendVariant(out: ref mut String, table: ref List[Opcode]) = {
+	out.append("const Instruction = ");
+	var k: i64 = 0;
+	while (k < table.length()) {
+		out.append(table.at(k).name);
+		out.append(" | ");
+		k = k + 1;
+	}
+	out.append("Unknown;\n");
+}
+
+#{
+# Constructor arguments taking the fields out of `op`.
+#}
+fun appendFieldArgs(out: ref mut String, bits: str) = {
+	var args: List[String];
+	if (bits[1] == 'X') args.push("((op >> 8u16) & 0xFu16) as i64".toString());
+	if (bits[2] == 'Y') args.push("((op >> 4u16) & 0xFu16) as i64".toString());
+	let width = immediateNibbles(bits);
+	if (width == 1) args.push("(op & 0xFu16) as i64".toString());
+	if (width == 2) args.push("(op & 0xFFu16) as u8".toString());
+	if (width == 3) args.push("op & 0xFFFu16".toString());
+	var k: i64 = 0;
+	while (k < args.length()) {
+		if (k > 0) out.append(", ");
+		out.append(args.at(k).asSlice());
+		k = k + 1;
+	}
+}
+
+#{
+# `fun decode(op: u16) -> Instruction`: the first matching bits wins.
+#}
+fun appendDecode(out: ref mut String, table: ref List[Opcode]) = {
+	out.append("fun decode(op: u16) -> Instruction = {\n");
+	var k: i64 = 0;
+	while (k < table.length()) {
+		let bits = table.at(k).bits;
+		let mv = maskAndValue(bits);
+		out.append("if ((op & ");
+		appendU16(out, mv._1);
+		out.append(") == ");
+		appendU16(out, mv._2);
+		out.append(") return ");
+		out.append(table.at(k).name);
+		out.append("(");
+		appendFieldArgs(out, bits);
+		out.append(");\n");
+		k = k + 1;
+	}
+	out.append("return Unknown(op);\n}\n");
+}
+
+#{
+# Classes, `Instruction` and `decode` for the whole table, as one `export`
+# block: an `expand` outside a function takes a single declaration.
+#}
+fun instructionSet() -> String = {
+	var table = opcodes();
+	var out = "export {\n".toString();
+	appendClasses(&out, &table);
+	appendVariant(&out, &table);
+	appendDecode(&out, &table);
+	out.append("}\n");
+	return out;
+}
+
+#{
+# A `match` statement on the `Instruction` named `subject` calling `exec(it)`;
+# SUPER-CHIP instructions first go through `requireSuperChip(bits)`.
+#}
+fun dispatch(subject: str) -> String = {
+	var table = opcodes();
+	var out = "{ match (".toString();
+	out.append(subject);
+	out.append(") {\n");
+	var k: i64 = 0;
+	while (k < table.length()) {
+		out.append("case it: ");
+		out.append(table.at(k).name);
+		if (table.at(k).superChip) {
+			out.append(" = if requireSuperChip(\"");
+			out.append(table.at(k).bits);
+			out.append("\") then exec(it) else ();\n");
+		} else {
+			out.append(" = exec(it);\n");
+		}
+		k = k + 1;
+	}
+	out.append("case it: Unknown = exec(it);\n}; }");
+	return out;
+}
+
+# An `expand` at module level can't call functions, but one in a namespace can.
+namespace instructions {
+	expand instructionSet();
+}

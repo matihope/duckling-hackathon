@@ -7,6 +7,7 @@ import src.result.Ok;
 import src.result.Err;
 import src.result.Result;
 import src.chip8.RomTooBig;
+import src.chip8.Halted;
 import src.tui.terminal.TerminalError;
 import src.tui.render.TooSmall;
 
@@ -15,13 +16,6 @@ import src.tui.render.TooSmall;
 #}
 class ReadFailed {
 	path: String;
-}
-
-#{
-# The CHIP-8 stopped on an instruction it can't run.
-#}
-class Halted {
-	reason: String;
 }
 
 #{

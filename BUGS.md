@@ -48,3 +48,9 @@
     - `std.math` (libm przez FFI, np. `math.sqrt`).
     Błąd nie mówi, która instrukcja zawiodła, trzeba bisectować.
 25) `match (result)` na lokalnej zmiennej z wariantem posiadającym `String` daje `Cannot implicitly copy a value of non-trivially-copyable type`. Trzeba `match (move result)` albo przekazać przez `ref` do funkcji.
+26) `expand` na poziomie modułu nie widzi żadnych funkcji (ani z tego modułu, ani zaimportowanych): `expand gen();` daje `Call failed because no matching functions were found.` W `namespace N { expand gen(); }` działa. Do tego przyjmuje tylko jedną deklarację. Obejście: wygenerować `export { ... }` i rozwinąć w namespace (`src/chip8/isa/isa.dk`).
+27) `if c then x else none` nie koerguje `none` do `?T`, nawet z `let v: ?str = ...` i `x as (?str)`: `Both branches ... the then branch is ?slice char and the else branch is Class None.` Obejście: dwa `return`.
+28) Comp-time: metoda na tymczasowej liście, `const N: i64 = opcodes().length();`, daje `VMThread has panicked: Data was freed`. Z `var t = opcodes();` działa.
+29) `const` z klasą zwróconą z funkcji (`const QQ: Q = q();`) też zawiesza duckc, jak 14).
+30) Zła sygnatura `main`, np. `fun main(argc: i64, argv: manyptr cptr char) -> i64`, wywala kompilator: `terminate called after throwing an instance of 'std::bad_expected_access<...>'` zamiast błędu.
+31) `for (x in ...)` działa tylko dla statycznych tablic: dla `List`/`str` daje `[Feature not implemented] for statements for non-array type`. Zmienna pętli to kopia, więc `for (b in mem) b = 0u8;` nie zeruje tablicy.

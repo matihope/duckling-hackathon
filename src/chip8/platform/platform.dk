@@ -1,0 +1,26 @@
+#{
+# Which machine the interpreter behaves like: the instruction set it accepts,
+# the quirks the original hardware had, and how fast it runs.
+#}
+import core.builtins.*;
+
+class Platform {
+	name: str;
+	superChipOps: bool; # SUPER-CHIP instructions (hires, scrolling, big font, ...)
+	vfReset: bool; # 8XY1/8XY2/8XY3 clear VF
+	shiftVy: bool; # 8XY6/8XYE shift VY into VX (otherwise VX in place)
+	memIncrement: bool; # FX55/FX65 advance I past the registers
+	jumpVx: bool; # BXNN jumps to XNN + VX (otherwise BNNN to NNN + V0)
+	displayWait: bool; # DXYN waits for the next frame
+	cyclesPerFrame: i64; # instructions per 60 Hz frame
+}
+
+#{
+# The original COSMAC VIP interpreter.
+#}
+fun cosmacVip() -> Platform = Platform("CHIP-8", false, true, true, true, false, true, 11);
+
+#{
+# SUPER-CHIP with the "modern" quirks Octo uses.
+#}
+fun superChip() -> Platform = Platform("SUPER-CHIP", true, false, false, false, true, false, 30);

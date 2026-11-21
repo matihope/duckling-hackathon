@@ -5,6 +5,7 @@
 import core.builtins.*;
 import core.containers.*;
 import src.chip8.Chip8;
+import src.chip8.Halted;
 import src.tui.*;
 import src.tui.terminal.*;
 import src.tui.render.*;
@@ -12,11 +13,6 @@ import src.errors.*;
 
 # ========== TIMING ===========
 const FRAME_NS: i64 = 16666667; # 60 Hz
-const CYCLES_PER_FRAME: i64 = 11; # ~660 instructions per second
-const SCHIP_CYCLES_PER_FRAME: i64 = 30; # SUPER-CHIP games expect a faster machine
-
-fun cyclesPerFrame(chip: ref Chip8)
-	-> i64 = if chip.superChip then SCHIP_CYCLES_PER_FRAME else CYCLES_PER_FRAME;
 
 # Terminals report key presses but not releases, so a key counts as held
 # for this long after its last byte (auto-repeat keeps refreshing it).
@@ -48,18 +44,17 @@ fun sleepNs(ns: i64) = {
 }
 
 #{
-# CHIP-8 key for keyboard byte `b`, or -1.
+# CHIP-8 key for keyboard byte `b`, if it is one.
 #}
-fun keyFor(b: u8) -> i64 = {
+fun keyFor(b: u8) -> ?i64 = {
 	var c = b as char;
 	if ('A' <= c <= 'Z') c = 'a' + (c - 'A');
 	var k: i64 = 0;
-	var found: i64 = -1;
-	while (found == -1 and k < 16) {
-		if (KEY_CHARS[k] == c) found = k;
+	while (k < 16) {
+		if (KEY_CHARS[k] == c) return k;
 		k = k + 1;
 	}
-	return found;
+	return none;
 }
 
 class Keypad {
@@ -81,7 +76,7 @@ class Keypad {
 				while (not next.isEmpty()) next = term.readByte();
 			}
 			let k = keyFor(b);
-			if (k >= 0) heldUntil[k] = now + KEY_HOLD_NS;
+			if (k.nonEmpty()) heldUntil[k.value()] = now + KEY_HOLD_NS;
 		}
 	}
 
@@ -95,12 +90,12 @@ class Keypad {
 }
 
 #{
-# Failed with `Halted` when the machine stopped, succeeded otherwise.
+# Failed with `Halted` when the machine halted, succeeded otherwise.
 #}
-fun haltResult(chip: ref Chip8) -> AppResult = {
-	if (chip.halted) return failed(Halted(copy chip.haltReason));
-	return succeeded();
-}
+fun stopResult(chip: ref Chip8) -> AppResult = match (&chip.status) {
+	case h: ref Halted = failed(Halted(copy h.reason));
+	case _ = succeeded();
+};
 
 # ========== TERMINAL RUN ===========
 
@@ -108,7 +103,9 @@ fun drawStatus(term: ref Terminal, chip: ref Chip8, title: str) = {
 	var out = "".toString();
 	appendMoveTo(&out, 1, 1);
 	out.append(title);
-	if (chip.superChip) out.append("  [SUPER-CHIP]");
+	out.append("  [");
+	out.append(chip.platform.name);
+	out.append("]");
 	out.append("  |  keys: 1234 qwer asdf zxcv  |  Ctrl-C / Esc: quit");
 	term.writeAll(out.asSlice());
 }
@@ -160,19 +157,13 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) ->
 	let bel = 7u8 as char;
 
 	var deadline = nowNs();
-	while (not keypad.quit and not chip.halted and not chip.exited) {
+	while (not keypad.quit and chip.running()) {
 		if (chip.width() != screen.placedWidth and not screen.fit(term, chip, title, size)) return failed(screen.small);
 
 		let now = nowNs();
 		keypad.poll(term, now);
 		keypad.apply(chip, now);
-
-		var n: i64 = 0;
-		while (n < cyclesPerFrame(chip)) {
-			chip.step();
-			n = n + 1;
-		}
-		chip.tickTimers();
+		chip.runFrame();
 
 		if (chip.screenDirty) {
 			let frame = renderFrame(&chip.display, screen.at);
@@ -191,7 +182,7 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) ->
 		deadline = deadline + FRAME_NS;
 		sleepNs(deadline - nowNs());
 	}
-	return haltResult(chip);
+	return stopResult(chip);
 }
 
 fun runInTerminal(term: ref Terminal, chip: ref Chip8, title: str) -> AppResult = {
@@ -220,13 +211,8 @@ fun runInteractive(chip: ref Chip8, title: str) -> AppResult = {
 #}
 fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
 	var f: i64 = 0;
-	while (f < frames and not chip.halted and not chip.exited) {
-		var n: i64 = 0;
-		while (n < cyclesPerFrame(chip)) {
-			chip.step();
-			n = n + 1;
-		}
-		chip.tickTimers();
+	while (f < frames and chip.running()) {
+		chip.runFrame();
 		f = f + 1;
 	}
 	var out = "".toString();
@@ -245,5 +231,5 @@ fun runHeadless(chip: ref Chip8, frames: i64) -> AppResult = {
 		y = y + 1;
 	}
 	print(&out);
-	return haltResult(chip);
+	return stopResult(chip);
 }

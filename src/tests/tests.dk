@@ -9,7 +9,7 @@ import src.testing.checkEq;
 import src.testing.checkStr;
 import src.testing.contains;
 import src.testing.hex;
-import src.utils.split_nul;
+import src.utils.splitNul;
 import cpu.addCpuTests;
 import octo.addOctoTests;
 import schip.addSuperChipTests;
@@ -38,7 +38,7 @@ fun testSplitNul() = {
 	s.append('\0');
 	s.append("cd");
 	s.append('\0');
-	var parts = split_nul(&s);
+	var parts = splitNul(&s);
 	checkEq(parts.length(), 2, "part count");
 	checkStr(parts.at(0).asSlice(), "ab", "first part");
 	checkStr(parts.at(1).asSlice(), "cd", "second part");
