@@ -124,7 +124,7 @@ class Terminal {
 	# Leaves the alternate screen, shows the cursor and restores the original
 	# termios.
 	#}
-	public mut fun restore() = {
+	public fun restore() = {
 		if (active) {
 			var out = "".toString();
 			appendCsi(&out, "?7h"); # autowrap back on

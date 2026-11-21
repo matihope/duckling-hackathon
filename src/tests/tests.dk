@@ -1,0 +1,56 @@
+#{
+# Test registry. Add a `fun testSomething() = {...}` and register it in `allTests`.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.testing.TestCase;
+import src.testing.check;
+import src.testing.checkEq;
+import src.testing.checkStr;
+import src.testing.contains;
+import src.testing.hex;
+import src.utils.split_nul;
+
+fun testU8Wraps() = {
+	let max = 255u8;
+	checkEq((max + 1u8) as i64, 0, "255u8 + 1u8");
+	let zero = 0u8;
+	checkEq((zero - 1u8) as i64, 255, "0u8 - 1u8");
+}
+
+fun testHex() = {
+	checkStr(hex(0).asSlice(), "0x0", "hex(0)");
+	checkStr(hex(0x1F2Ai64).asSlice(), "0x1F2A", "hex(0x1F2A)");
+}
+
+fun testContains() = {
+	check(contains("chip8.cls", "cls"), "suffix");
+	check(contains("abc", ""), "empty needle");
+	check(not contains("abc", "abcd"), "needle longer");
+	check(not contains("abc", "x"), "missing");
+}
+
+fun testSplitNul() = {
+	var s = "ab".toString();
+	s.append('\0');
+	s.append("cd");
+	s.append('\0');
+	var parts = split_nul(&s);
+	checkEq(parts.length(), 2, "part count");
+	checkStr(parts.at(0).asSlice(), "ab", "first part");
+	checkStr(parts.at(1).asSlice(), "cd", "second part");
+}
+
+fun testFailing() = {
+	check(false == true, "Failing");
+}
+
+fun allTests() -> List[TestCase] = {
+	var tests: List[TestCase];
+	tests.push(TestCase("lang.u8_wraps", testU8Wraps));
+	tests.push(TestCase("testing.hex", testHex));
+	tests.push(TestCase("testing.contains", testContains));
+	tests.push(TestCase("utils.split_nul", testSplitNul));
+	tests.push(TestCase("failing", testFailing));
+	return tests;
+}

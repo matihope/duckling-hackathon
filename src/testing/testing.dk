@@ -1,0 +1,167 @@
+#{
+# Minimal unit-test framework. Tests are `fun() -> ()` bodies that call
+# `check`/`checkEq`; `runTests` runs them and reports.
+#}
+import core.builtins.*;
+import core.containers.*;
+import src.tui.isatty;
+import src.tui.STDOUT_FILENO;
+
+class TestCase {
+	name: str;
+	body: funptr() -> ();
+}
+
+# Failure messages of the running test; cleared before each test.
+var CURRENT_FAILURES: List[String];
+
+# ========== COLORS ===========
+const GREEN: str = "32";
+const RED: str = "31";
+const YELLOW: str = "33";
+const DIM: str = "2";
+
+const PASS_LABEL: str = "PASS";
+const FAIL_LABEL: str = "FAIL";
+const FAILED_LABEL: str = "failed:";
+
+# Whether output goes to a terminal; decided once in `runTests`.
+var USE_COLOR: bool = false;
+
+#{
+# `text` wrapped in the SGR `code` (e.g. "31" for red) when colors are on, else `text` as is.
+#}
+fun paint(code: str, text: str) -> String = {
+	if (not USE_COLOR) return text.toString();
+	let esc = 27u8 as char;
+	var out = "".toString();
+	out.append(esc);
+	out.append('[');
+	out.append(code);
+	out.append('m');
+	out.append(text);
+	out.append(esc);
+	out.append("[0m");
+	return out;
+}
+
+#{
+# Records a failure of the running test.
+#}
+fun fail(message: String) = {
+	CURRENT_FAILURES.push(move message);
+}
+
+#{
+# `0x`-prefixed uppercase hex of `v` (no sign handling; negative values print as two's complement).
+#}
+fun hex(v: i64) -> String = {
+	let digits = "0123456789ABCDEF";
+	var out = "".toString();
+	var rest = v as u64;
+	if (rest == 0u64) out.append('0');
+	while (rest != 0u64) {
+		out.prepend(digits[(rest & 15u64) as i64]);
+		rest = rest >> 4u64;
+	}
+	out.prepend('x');
+	out.prepend('0');
+	return out;
+}
+
+#{
+# Marks the running test as failed when `cond` is false.
+#}
+fun check(cond: bool, what: str) = {
+	if (not cond) {
+		fail(what.toString());
+	}
+}
+
+#{
+# Marks the running test as failed when `actual != expected`. Works for any integer
+# that widens to i64 (u8/u16/u32/i32...).
+#}
+fun checkEq(actual: i64, expected: i64, what: str) = {
+	if (actual != expected) {
+		fail(f"{what}: got {actual} ({hex(actual)}), expected {expected} ({hex(expected)})");
+	}
+}
+
+#{
+# Whether `a` and `b` hold the same characters (`str == str` isn't supported).
+#}
+fun strEq(a: str, b: str) -> bool = {
+	if (a.length() != b.length()) return false;
+	var i: i64 = 0;
+	while (i < a.length() and a[i] == b[i]) i = i + 1;
+	return i == a.length();
+}
+
+#{
+# Marks the running test as failed when `actual` and `expected` differ.
+#}
+fun checkStr(actual: str, expected: str, what: str) = {
+	if (not strEq(actual, expected)) {
+		fail(f"{what}: got \"{actual}\", expected \"{expected}\"");
+	}
+}
+
+#{
+# Whether `needle` occurs in `haystack`.
+#}
+fun contains(haystack: str, needle: str) -> bool = {
+	var start: i64 = 0;
+	var found = false;
+	while (not found and start + needle.length() <= haystack.length()) {
+		var i: i64 = 0;
+		while (i < needle.length() and haystack[start + i] == needle[i]) i = i + 1;
+		found = i == needle.length();
+		start = start + 1;
+	}
+	return found;
+}
+
+#{
+# Runs every test whose name contains `filter` (all when none), printing each
+# result and, at the end, the names of the failed tests.
+# Returns the process exit code: 0 when all passed, 1 otherwise.
+#}
+fun runTests(tests: ref List[TestCase], filter: ?str) -> i64 = {
+	USE_COLOR = isatty(STDOUT_FILENO) == 1i32;
+	var passed: i64 = 0;
+	var failed: List[String];
+	var i: i64 = 0;
+	while (i < tests.length()) {
+		let name = tests.at(i).name;
+		if (filter.isEmpty() or contains(name, filter.value())) {
+			CURRENT_FAILURES.clear();
+			let body = tests.at(i).body;
+			body();
+			if (CURRENT_FAILURES.length() == 0) {
+				print(f"{paint(GREEN, PASS_LABEL)} {name}\n");
+				passed = passed + 1;
+			} else {
+				print(f"{paint(RED, FAIL_LABEL)} {name}\n");
+				var j: i64 = 0;
+				while (j < CURRENT_FAILURES.length()) {
+					print(f"    {paint(YELLOW, CURRENT_FAILURES.at(j).asSlice())}\n");
+					j = j + 1;
+				}
+				failed.push(name.toString());
+			}
+		}
+		i = i + 1;
+	}
+	var summary_color = GREEN;
+	if (failed.length() > 0) summary_color = RED;
+	let summary = f"{passed} passed, {failed.length()} failed";
+	print(f"\n{paint(summary_color, summary.asSlice())}\n");
+	var k: i64 = 0;
+	while (k < failed.length()) {
+		print(f"  {paint(DIM, FAILED_LABEL)} {paint(RED, failed.at(k).asSlice())}\n");
+		k = k + 1;
+	}
+	if (failed.length() > 0) return 1;
+	return 0;
+}

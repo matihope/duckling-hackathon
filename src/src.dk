@@ -4,16 +4,20 @@ import chip8.test;
 import utils.read_cmdline;
 import utils.read_file;
 import utils.exit_with_error;
-
-fun printOk(s: ref String) -> i64 = {
-    print(s);
-    return 0;
-}
+import testing.runTests;
+import testing.strEq;
+import tests.allTests;
 
 fun main() = {
     var args = read_cmdline();
     if (args.isEmpty()) exit_with_error("Give me a path");
     if (args.value().length() < 2i64) exit_with_error("File path is invalid");
+
+    if (strEq(args.value().at(1i64).asSlice(), "-t")) {
+        var tests = allTests();
+        if (args.value().length() > 2i64) return runTests(&tests, args.value().at(2i64).asSlice());
+        return runTests(&tests, none);
+    }
 
     match (read_file(args.value().at(1i64).asSlice())) {
         case content: String = print(&content);
