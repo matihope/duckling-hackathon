@@ -18,31 +18,6 @@ const SCHIP_CYCLES_PER_FRAME: i64 = 30; # SUPER-CHIP games expect a faster machi
 fun cyclesPerFrame(chip: ref Chip8)
 	-> i64 = if chip.superChip then SCHIP_CYCLES_PER_FRAME else CYCLES_PER_FRAME;
 
-#{
-# Size of the drawn screen: SUPER-CHIP always shows 128x64 (lores pixels as 2x2),
-# so the frame doesn't change size when a program switches resolution.
-#}
-fun viewWidth(chip: ref Chip8) -> i64 = if chip.superChip then 128i64 else 64i64;
-fun viewHeight(chip: ref Chip8) -> i64 = if chip.superChip then 64i64 else 32i64;
-
-#{
-# Copies `chip`'s screen into `view`, scaled up to the view size.
-#}
-fun fillView(chip: ref Chip8, view: ref Framebuffer) = {
-	let vw = viewWidth(chip);
-	let vh = viewHeight(chip);
-	let sx = vw / chip.width();
-	let sy = vh / chip.height();
-	var y: i64 = 0;
-	while (y < vh) {
-		var x: i64 = 0;
-		while (x < vw) {
-			view[y * vw + x] = chip.pixel(x / sx, y / sy);
-			x = x + 1;
-		}
-		y = y + 1;
-	}
-}
 # Terminals report key presses but not releases, so a key counts as held
 # for this long after its last byte (auto-repeat keeps refreshing it).
 const KEY_HOLD_NS: i64 = 300000000;
@@ -138,16 +113,56 @@ fun drawStatus(term: ref Terminal, chip: ref Chip8, title: str) = {
 	term.writeAll(out.asSlice());
 }
 
-fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) -> AppResult = {
+#{
+# Where the frame is drawn. Re-placed whenever the program switches resolution,
+# so a 64x32 program fits a small terminal and the frame grows on `hires`.
+#}
+class Screen {
+	at: Placement;
+	placedWidth: i64 = 0; # width `at` was computed for; 0 = not placed yet
+	small: TooSmall; # why the last `fit` failed
+
+	fun accept(p: Placement) -> bool = {
+		at = p;
+		return true;
+	}
+
+	fun reject(s: TooSmall) -> bool = {
+		small = s;
+		return false;
+	}
+
+	#{
+	# Clears the terminal and places the frame for `chip`'s current resolution.
+	# False when the terminal is too small for it.
+	#}
+	mut fun fit(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) -> bool = {
+		let ok = match (placeCentered(size, STATUS_ROWS, chip.width(), chip.height())) {
+			case p: Placement = accept(p);
+			case s: TooSmall = reject(s);
+		};
+		if (ok) {
+			placedWidth = chip.width();
+			var out = "".toString();
+			appendCsi(&out, "2J");
+			term.writeAll(out.asSlice());
+			drawStatus(term, chip, title);
+			chip.screenDirty = true;
+		}
+		return ok;
+	}
+}
+
+fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) -> AppResult = {
 	var keypad: Keypad;
+	var screen: Screen;
 	var beeping = false;
 	let bel = 7u8 as char;
-	drawStatus(term, chip, title);
-	chip.screenDirty = true;
 
 	var deadline = nowNs();
-	var view: Framebuffer;
 	while (not keypad.quit and not chip.halted and not chip.exited) {
+		if (chip.width() != screen.placedWidth and not screen.fit(term, chip, title, size)) return failed(screen.small);
+
 		let now = nowNs();
 		keypad.poll(term, now);
 		keypad.apply(chip, now);
@@ -160,8 +175,7 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) ->
 		chip.tickTimers();
 
 		if (chip.screenDirty) {
-			fillView(chip, &view);
-			let frame = renderFrame(&view, at);
+			let frame = renderFrame(&chip.display, screen.at);
 			term.writeAll(frame.asSlice());
 			chip.screenDirty = false;
 		}
@@ -180,16 +194,9 @@ fun runFrames(term: ref Terminal, chip: ref Chip8, title: str, at: Placement) ->
 	return haltResult(chip);
 }
 
-fun runPlaced(term: ref Terminal, chip: ref Chip8, title: str, size: Winsize) -> AppResult = {
-	return match (placeCentered(size, STATUS_ROWS, viewWidth(chip), viewHeight(chip))) {
-		case at: Placement = runFrames(term, chip, title, at);
-		case small: TooSmall = failed(small);
-	};
-}
-
 fun runInTerminal(term: ref Terminal, chip: ref Chip8, title: str) -> AppResult = {
 	return match (term.size()) {
-		case size: Winsize = runPlaced(term, chip, title, size);
+		case size: Winsize = runFrames(term, chip, title, size);
 		case err: TerminalError = failed(err);
 	};
 }

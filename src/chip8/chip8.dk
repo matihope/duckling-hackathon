@@ -3,9 +3,10 @@
 # No I/O here; a frontend calls `step()` / `tickTimers()`, feeds `keys` and redraws
 # only when `screenDirty` is set.
 #
-# Two modes, chosen with `superChip` before `reset()`:
+# Two modes, chosen with `superChip` before `reset()` (the app defaults to
+# SUPER-CHIP; this class defaults to CHIP-8):
 #
-# CHIP-8 (default), quirks of the original COSMAC VIP: 8XY1/2/3 reset VF,
+# CHIP-8, quirks of the original COSMAC VIP: 8XY1/2/3 reset VF,
 # 8XY6/8XYE shift VY, FX55/FX65 advance I, BNNN jumps to NNN + V0, DXYN waits for
 # the next frame (display wait). 64x32 display.
 #
@@ -694,7 +695,7 @@ class Chip8 {
 
 	# False (and halts) when a SUPER-CHIP instruction runs in CHIP-8 mode.
 	fun requireSuperChip(name: str) -> bool = {
-		if (not superChip) halt(f"SUPER-CHIP instruction {name} at {hex4((pc - 2u16) as i64)} (run with --schip)");
+		if (not superChip) halt(f"SUPER-CHIP instruction {name} at {hex4((pc - 2u16) as i64)} (run without --chip8)");
 		return superChip;
 	}
 
