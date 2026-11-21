@@ -17,6 +17,7 @@ import isa.instructions.*;
 import platform.*;
 import src.display.Display;
 import src.strings.*;
+import src.bits.bit;
 
 extern ("C") {
 	fundecl rand() -> i32;
@@ -245,7 +246,7 @@ class Chip8 {
 	# Marks hex key `k` (0..15) as held or released.
 	#}
 	fun setKey(k: i64, down: bool) = {
-		keys[k] = down as u8;
+		keys[k] = bit(down);
 	}
 
 	# ---------- helpers ----------
@@ -361,13 +362,13 @@ class Chip8 {
 	fun exec(it: Sub) = {
 		let noBorrow = v[it.x] >= v[it.y];
 		v[it.x] = v[it.x] - v[it.y];
-		v[0xF] = noBorrow as u8;
+		v[0xF] = bit(noBorrow);
 	}
 
 	fun exec(it: SubN) = {
 		let noBorrow = v[it.y] >= v[it.x];
 		v[it.x] = v[it.y] - v[it.x];
-		v[0xF] = noBorrow as u8;
+		v[0xF] = bit(noBorrow);
 	}
 
 	fun exec(it: ShiftRight) = {

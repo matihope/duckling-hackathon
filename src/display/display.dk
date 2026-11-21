@@ -6,6 +6,7 @@
 # storage type is a detail of this file.
 #}
 import core.builtins.*;
+import src.bits.bit;
 
 const LORES_W: i64 = 64;
 const LORES_H: i64 = 32;
@@ -74,7 +75,7 @@ class Display {
 				let sx = x - dx;
 				let sy = y - dy;
 				let on = sx >= 0 and sx < w and sy >= 0 and sy < h and old[sy * w + sx] != 0u8;
-				pixels[y * w + x] = on as u8;
+				pixels[y * w + x] = bit(on);
 				x = x + 1;
 			}
 			y = y + 1;

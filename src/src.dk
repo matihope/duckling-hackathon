@@ -2,7 +2,6 @@ import core.builtins.*;
 import core.containers.*;
 import utils.readCmdline;
 import utils.readFile;
-import utils.exitWithError;
 import testing.runTests;
 import strings.*;
 import tests.allTests;
@@ -171,10 +170,14 @@ fun execute(command: Command) -> i64 = {
 	};
 }
 
-fun main() = {
+#{
+# Returns the exit code instead of calling libc `exit`, which would kill the
+# DVM from inside a program it is running.
+#}
+fun main() -> i64 = {
 	var args = readCmdline();
-	if (args.isEmpty()) exitWithError("could not read /proc/self/cmdline");
+	if (args.isEmpty()) return fail("could not read the command line".toString());
 	let command = parseArgs(args.value());
-	if (command.isEmpty()) exitWithError(USAGE);
+	if (command.isEmpty()) return fail(USAGE.toString());
 	return execute(command.value());
 }

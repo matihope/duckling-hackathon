@@ -66,3 +66,12 @@
     Gdy tablica jest ostatnim polem: `LLVM struct size mismatch for class ...`. Obejście: `u8[N]` z wartościami 0/1 (`Chip8.display`, `Chip8.keys`); dostęp przez `pixel()` i `setKey()`.
 33) Missing return statement nie daje source posititon
 34) Brakuje konstruktorów użytkowanika
+35) DVM: `bool as u8` wywala backend DVM: `Instruction zext_p8_p8 does not exist` (asercja w `instruction_builder.cpp`). Na natywnym backendzie działa; `bool as i64` i `char as u8` działają na obu.
+    ```
+    fun conv(b: bool) -> u8 = b as u8;
+    fun main() -> i64 = { return conv(true) as i64; }   # duck build --profile dvm
+    ```
+    Obejście: `bit(b)` z `src/bits` (`if b then 1u8 else 0u8`).
+36) DVM: program nie dostaje argumentów. `main()` nie ma parametrów, a `/proc/self/cmdline` to linia poleceń procesu `VM` (`VM run -c a,b,c program.dbc`). Do tego VM łączy argumenty przecinkami, więc pojedynczy argument nie może zawierać przecinka. Obejście: `readCmdline` z `@dvm_only_impl` wyciąga listę z `-c`/`--args` (`src/utils`).
+37) DVM: wywołanie libc `exit()` przez FFI z programu w VM zabija VM bez sprzątania: `Supervisor destroyed while process PID(0) still exists...`, `Resource deadlock avoided`, core dump. Obejście: zwracać kod wyjścia z `main`.
+38) DVM: start trwa ~7 s nawet dla programu, który od razu kończy działanie (7,5 MB bajtkodu, głównie port assemblera Octo i testy). `opt-level` nie zmienia rozmiaru `.dbc`.

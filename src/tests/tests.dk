@@ -8,6 +8,7 @@ import src.testing.check;
 import src.testing.checkEq;
 import src.testing.checkStr;
 import src.strings.*;
+import src.utils.argsFromVmCmdline;
 import cpu.addCpuTests;
 import octo.addOctoTests;
 import schip.addSuperChipTests;
@@ -71,6 +72,34 @@ fun testAffixes() = {
 	check(not endsWith("o", ".8o"), "suffix longer than the string");
 }
 
+fun testSplitOn() = {
+	var parts = splitOn("a,,b", ',');
+	checkEq(parts.length(), 3, "piece count");
+	checkStr(parts.at(0).asSlice(), "a", "first");
+	checkStr(parts.at(1).asSlice(), "", "empty middle");
+	checkStr(parts.at(2).asSlice(), "b", "last");
+}
+
+fun cmdline(words: str) -> List[String] = splitOn(words, ' ');
+
+fun testArgsFromVmCmdline() = {
+	var vm = cmdline("VM run -c game.8o,--dump,30 /b/app.dbc");
+	var args = argsFromVmCmdline(&vm);
+	checkEq(args.length(), 4, "argv[0] + 3 arguments");
+	checkStr(args.at(0).asSlice(), "/b/app.dbc", "argv[0] is the bytecode");
+	checkStr(args.at(1).asSlice(), "game.8o", "first argument");
+	checkStr(args.at(3).asSlice(), "30", "last argument");
+
+	var bare = cmdline("VM --fast-mode run /b/app.dbc");
+	var none_given = argsFromVmCmdline(&bare);
+	checkEq(none_given.length(), 1, "no -c: just argv[0]");
+
+	var longForm = cmdline("VM run --args -t,cpu /b/app.dbc");
+	var tests = argsFromVmCmdline(&longForm);
+	checkEq(tests.length(), 3, "--args works like -c");
+	checkStr(tests.at(1).asSlice(), "-t", "option passed through");
+}
+
 fun allTests() -> List[TestCase] = {
 	var tests: List[TestCase];
 	tests.push(TestCase("lang.u8_wraps", testU8Wraps));
@@ -81,6 +110,8 @@ fun allTests() -> List[TestCase] = {
 	tests.push(TestCase("strings.digit_value", testDigitValue));
 	tests.push(TestCase("strings.parse_decimal", testParseDecimal));
 	tests.push(TestCase("strings.split_nul", testSplitNul));
+	tests.push(TestCase("strings.split_on", testSplitOn));
+	tests.push(TestCase("utils.args_from_vm_cmdline", testArgsFromVmCmdline));
 	addCpuTests(&tests);
 	addOctoTests(&tests);
 	addSuperChipTests(&tests);

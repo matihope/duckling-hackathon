@@ -1,3 +1,9 @@
 metadata:
   name: duckling-hackathon
   version: '1.0.0'
+
+profiles:
+  # Compile to DVM bytecode and run it on the Duckling VM: `duck run --profile dvm`.
+  dvm:
+    inherits: dev
+    dvm-bytecode: true

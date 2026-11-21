@@ -1,0 +1,8 @@
+#{
+# `true` -> 1, `false` -> 0, as a `u8`.
+#
+# Use this instead of `b as u8`: that cast crashes duckc's DVM backend
+# ("Instruction zext_p8_p8 does not exist", BUGS.md), so the project wouldn't
+# build with the `dvm` profile.
+#}
+fun bit(b: bool) -> u8 = if b then 1u8 else 0u8;

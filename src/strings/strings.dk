@@ -98,6 +98,26 @@ fun splitNul(s: ref String) -> List[String] = {
 	return parts;
 }
 
+#{
+# Splits `s` at every `sep`: `"a,,b"` gives `a`, ``, `b`; `""` gives one empty piece.
+#}
+fun splitOn(s: str, sep: char) -> List[String] = {
+	var parts: List[String];
+	var current: String;
+	var k: i64 = 0;
+	while (k < s.length()) {
+		if (s[k] == sep) {
+			parts.push(move current);
+			current = stringReserve(0);
+		} else {
+			current.append(s[k]);
+		}
+		k = k + 1;
+	}
+	parts.push(move current);
+	return parts;
+}
+
 # ========== HEX ===========
 
 #{

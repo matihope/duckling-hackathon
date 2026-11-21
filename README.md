@@ -105,6 +105,25 @@ CHIP-8 keypad     keyboard
 for 300 ms after its last keystroke; holding a key down keeps it held through keyboard
 auto-repeat.
 
+### Running on the Duckling VM
+
+The project also builds to DVM bytecode through the `dvm` profile in `quackconfig.yaml`:
+
+```sh
+duck build --profile dvm
+duck run --profile dvm games/flappyduck.8o
+duck run --profile dvm -- -t
+```
+
+`duck run` needs the `VM` binary on your `PATH`. Everything works the same as the
+native build, with three differences:
+
+- Starting takes about 7 seconds while the VM loads the bytecode.
+- Interactive play is slower: the VM redraws a hires screen about 5 times a second, so
+  SUPER-CHIP games run in slow motion. Headless `--dump` runs at full speed.
+- The VM passes arguments to the program as a comma-separated list, so a single argument
+  can't contain a comma.
+
 ## Examples
 
 Write a program in Octo and run it straight away:

@@ -1,7 +1,6 @@
 import core.builtins as builtins;
 import core.containers as containers;
-import src.tui.exit;
-import src.strings.splitNul;
+import src.strings.*;
 
 extern ("C") {
 	fundecl fopen(path: cptr char, mode: cptr char) -> cptr u8;
@@ -45,15 +44,57 @@ fun readFile(path: str) -> ?String = {
 	return content;
 }
 
-# Program arguments (argv[0] first), or none when the file can't be opened.
+#{
+# The command line of this process (argv[0] first), or none when it can't be read.
 # @note Linux only.
-fun readCmdline() -> ?List[String] = {
+#}
+fun processCmdline() -> ?List[String] = {
 	var content = readFile("/proc/self/cmdline");
 	if (content.isEmpty()) return none;
 	return splitNul(content.value());
 }
 
-fun exitWithError(er: str) -> void = {
-	print(f"Error: {er}\n");
-	exit(1);
+#{
+# The program's arguments, argv[0] first; none when they can't be read.
+#
+# On the native backend this is the process's own command line. On the DVM the
+# process is the `VM` binary, so see `argsFromVmCmdline`.
+#}
+@backend_dependent
+fundecl readCmdline() -> ?List[String];
+
+@native_only_impl
+fun readCmdline() -> ?List[String] = processCmdline();
+
+@dvm_only_impl
+fun readCmdline() -> ?List[String] = {
+	var vm = processCmdline();
+	if (vm.isEmpty()) return none;
+	return argsFromVmCmdline(vm.value());
+}
+
+#{
+# The program's arguments out of the VM's command line,
+# `VM [options] run [options] [-c a,b,c] program.dbc`: the .dbc path becomes
+# argv[0], followed by the `-c` / `--args` list. The VM splits that list on
+# commas, so a single argument can't contain one.
+#}
+fun argsFromVmCmdline(vm: ref List[String]) -> List[String] = {
+	var args: List[String];
+	if (vm.length() == 0) return args;
+	args.push(vm.at(vm.length() - 1).toString());
+	var k: i64 = 0;
+	while (k + 1 < vm.length()) {
+		let option = vm.at(k).asSlice();
+		if (strEq(option, "-c") or strEq(option, "--args")) {
+			var given = splitOn(vm.at(k + 1).asSlice(), ',');
+			var j: i64 = 0;
+			while (j < given.length()) {
+				args.push(given.at(j).toString());
+				j = j + 1;
+			}
+		}
+		k = k + 1;
+	}
+	return args;
 }
