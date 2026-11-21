@@ -1,10 +1,10 @@
 #{
-# CHIP-8 core tests. Programs are assembled at compile time with `expand ch8(...)`.
+# CHIP-8 core tests. Programs are Octo, assembled at compile time with `expand octo(...)`.
 #}
 import core.builtins.*;
 import core.containers.*;
 import src.chip8.Chip8;
-import src.chip8.asm.ch8;
+import src.chip8.octo.octo;
 import src.testing.TestCase;
 import src.testing.check;
 import src.testing.checkEq;
@@ -17,27 +17,10 @@ fun steps(c: ref Chip8, n: i64) = {
 	}
 }
 
-fun testAsmEncoding() = {
-	var c: Chip8;
-	c.reset();
-	expand ch8("c", "CLS; ld v3, 0x2A; DRW V1, V2, 15; 1234; DB 0xF0 #90 7");
-	checkEq(c.mem[0x200], 0x00, "CLS hi");
-	checkEq(c.mem[0x201], 0xE0, "CLS lo");
-	checkEq(c.mem[0x202], 0x63, "LD hi");
-	checkEq(c.mem[0x203], 0x2A, "LD lo");
-	checkEq(c.mem[0x204], 0xD1, "DRW hi");
-	checkEq(c.mem[0x205], 0x2F, "DRW lo");
-	checkEq(c.mem[0x206], 0x12, "raw hi");
-	checkEq(c.mem[0x207], 0x34, "raw lo");
-	checkEq(c.mem[0x208], 0xF0, "DB 1");
-	checkEq(c.mem[0x209], 0x90, "DB 2");
-	checkEq(c.mem[0x20A], 7, "DB 3");
-}
-
 fun testAddImmWrapsWithoutFlag() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 0xFF; ADD V0, 2");
+	expand octo("c", ": main  v0 := 0xFF  v0 += 2");
 	steps(&c, 2);
 	checkEq(c.v[0], 1, "V0");
 	checkEq(c.v[0xF], 0, "VF untouched");
@@ -46,7 +29,7 @@ fun testAddImmWrapsWithoutFlag() = {
 fun testAddRegCarry() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 0xFF; LD V1, 2; ADD V0, V1; LD V2, 1; ADD V2, V2");
+	expand octo("c", ": main  v0 := 0xFF  v1 := 2  v0 += v1  v2 := 1  v2 += v2");
 	steps(&c, 3);
 	checkEq(c.v[0], 1, "V0 wraps");
 	checkEq(c.v[0xF], 1, "carry");
@@ -58,7 +41,10 @@ fun testAddRegCarry() = {
 fun testSubAndSubN() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 5; LD V1, 7; SUB V0, V1; LD V2, 7; LD V3, 5; SUB V2, V3; LD V4, 5; LD V5, 7; SUBN V4, V5");
+	expand octo(
+		"c",
+		": main  v0 := 5  v1 := 7  v0 -= v1  v2 := 7  v3 := 5  v2 -= v3  v4 := 5  v5 := 7  v4 =- v5"
+	);
 	steps(&c, 3);
 	checkEq(c.v[0], 0xFE, "5 - 7");
 	checkEq(c.v[0xF], 0, "borrow -> VF 0");
@@ -73,7 +59,7 @@ fun testSubAndSubN() = {
 fun testShiftsUseVy() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V1, 0x81; SHR V0, V1; SHL V2, V1");
+	expand octo("c", ": main  v1 := 0x81  v0 >>= v1  v2 <<= v1");
 	steps(&c, 2);
 	checkEq(c.v[0], 0x40, "SHR result from VY");
 	checkEq(c.v[0xF], 1, "SHR shifted-out bit");
@@ -85,7 +71,7 @@ fun testShiftsUseVy() = {
 fun testFlagWrittenAfterResult() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD VF, 0xFF; LD V1, 1; ADD VF, V1");
+	expand octo("c", ": main  vf := 0xFF  v1 := 1  vf += v1");
 	steps(&c, 3);
 	checkEq(c.v[0xF], 1, "VF holds carry, not sum");
 }
@@ -93,7 +79,7 @@ fun testFlagWrittenAfterResult() = {
 fun testLogicResetsVf() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD VF, 1; LD V0, 0x0C; LD V1, 0x0A; OR V0, V1");
+	expand octo("c", ": main  vf := 1  v0 := 0x0C  v1 := 0x0A  v0 |= v1");
 	steps(&c, 4);
 	checkEq(c.v[0], 0x0E, "OR");
 	checkEq(c.v[0xF], 0, "VF reset");
@@ -102,7 +88,7 @@ fun testLogicResetsVf() = {
 fun testCallRet() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "CALL 0x206; LD V1, 7; JP 0x204; LD V0, 5; RET");
+	expand octo("c", ": main  sub  v1 := 7  : spin  jump spin  : sub  v0 := 5  return");
 	steps(&c, 1);
 	checkEq(c.pc, 0x206, "pc after CALL");
 	checkEq(c.sp, 1, "sp after CALL");
@@ -116,7 +102,7 @@ fun testCallRet() = {
 fun testSkips() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "SE V0, 0; LD V1, 1; SNE V0, 0; LD V2, 2");
+	expand octo("c", ": main  if v0 != 0 then  v1 := 1  if v0 == 0 then  v2 := 2");
 	steps(&c, 3);
 	checkEq(c.v[1], 0, "SE skipped");
 	checkEq(c.v[2], 2, "SNE did not skip");
@@ -125,7 +111,7 @@ fun testSkips() = {
 fun testBcdAndMemory() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 123; LD I, 0x300; LD B, V0; LD V2, [I]; LD I, 0x310; LD [I], V2");
+	expand octo("c", ": main  v0 := 123  i := 0x300  bcd v0  load v2  i := 0x310  save v2");
 	steps(&c, 3);
 	checkEq(c.mem[0x300], 1, "hundreds");
 	checkEq(c.mem[0x301], 2, "tens");
@@ -142,7 +128,7 @@ fun testDrawCollisionAndDisplayWait() = {
 	var c: Chip8;
 	c.reset();
 	c.screenDirty = false;
-	expand ch8("c", "LD F, V0; DRW V1, V2, 5; DRW V1, V2, 5");
+	expand octo("c", ": main  i := hex v0  sprite v1 v2 5  sprite v1 v2 5");
 	steps(&c, 1);
 	check(not c.screenDirty, "LD F doesn't touch the screen");
 	steps(&c, 5);
@@ -161,7 +147,7 @@ fun testDrawCollisionAndDisplayWait() = {
 fun testDrawClipsAndWrapsStart() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD I, 0x300; LD V1, 62; DRW V1, V0, 1; LD V1, 65; DRW V1, V0, 1");
+	expand octo("c", ": main  i := 0x300  v1 := 62  sprite v1 v0 1  v1 := 65  sprite v1 v0 1");
 	c.mem[0x300] = 0xFFu8;
 	steps(&c, 3);
 	check(c.pixel(62, 0) and c.pixel(63, 0), "drawn up to the edge");
@@ -174,7 +160,7 @@ fun testDrawClipsAndWrapsStart() = {
 fun testTimers() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 3; LD DT, V0; LD ST, V0; LD V1, DT");
+	expand octo("c", ": main  v0 := 3  delay := v0  buzzer := v0  v1 := delay");
 	steps(&c, 3);
 	c.tickTimers();
 	steps(&c, 1);
@@ -185,7 +171,7 @@ fun testTimers() = {
 fun testWaitKeyNeedsRelease() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, K");
+	expand octo("c", ": main  v0 := key");
 	steps(&c, 1);
 	checkEq(c.pc, 0x200, "waits with no key");
 	c.keys[5] = true;
@@ -200,7 +186,7 @@ fun testWaitKeyNeedsRelease() = {
 fun testSkipKey() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "LD V0, 0xA; SKP V0; LD V1, 1; SKNP V0; LD V2, 1");
+	expand octo("c", ": main  v0 := 0xA  if v0 -key then  v1 := 1  if v0 key then  v2 := 1");
 	c.keys[0xA] = true;
 	steps(&c, 4);
 	checkEq(c.v[1], 0, "SKP skipped");
@@ -210,14 +196,13 @@ fun testSkipKey() = {
 fun testUnknownOpcodeHalts() = {
 	var c: Chip8;
 	c.reset();
-	expand ch8("c", "0123");
+	expand octo("c", ": main  0x01 0x23");
 	steps(&c, 2);
 	check(c.halted, "halted");
 	checkEq(c.pc, 0x202, "no further steps");
 }
 
 fun addCpuTests(tests: ref List[TestCase]) = {
-	tests.push(TestCase("asm.encoding", testAsmEncoding));
 	tests.push(TestCase("cpu.add_imm_wraps", testAddImmWrapsWithoutFlag));
 	tests.push(TestCase("cpu.add_reg_carry", testAddRegCarry));
 	tests.push(TestCase("cpu.sub_subn", testSubAndSubN));

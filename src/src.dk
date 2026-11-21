@@ -22,40 +22,40 @@ const USAGE: str = "usage: duckling-hackathon <rom.ch8 | program.8o> [--dump <fr
 
 # Non-negative decimal from `s`, or -1.
 fun parseCount(s: str) -> i64 = {
-    if (s.length() == 0) return -1;
-    var value: i64 = 0;
-    var k: i64 = 0;
-    while (k < s.length()) {
-        if (s[k] < '0' or s[k] > '9') return -1;
-        value = value * 10 + (s[k] - '0') as i64;
-        k = k + 1;
-    }
-    return value;
+	if (s.length() == 0) return -1;
+	var value: i64 = 0;
+	var k: i64 = 0;
+	while (k < s.length()) {
+		if (s[k] < '0' or s[k] > '9') return -1;
+		value = value * 10 + (s[k] - '0') as i64;
+		k = k + 1;
+	}
+	return value;
 }
 
 fun start(chip: ref Chip8, path: str, dumpFrames: i64) -> AppResult = {
-    if (dumpFrames >= 0) return runHeadless(chip, dumpFrames);
-    return runInteractive(chip, path);
+	if (dumpFrames >= 0) return runHeadless(chip, dumpFrames);
+	return runInteractive(chip, path);
 }
 
 fun runRom(rom: ref String, path: str, dumpFrames: i64) -> AppResult = {
-    var chip: Chip8;
-    chip.reset();
-    return match (chip.loadRom(rom.asSlice())) {
-        case _: Ok[()] = start(&chip, path, dumpFrames);
-        case e: Err[RomTooBig] = failed(e.error);
-    };
+	var chip: Chip8;
+	chip.reset();
+	return match (chip.loadRom(rom.asSlice())) {
+		case _: Ok[()] = start(&chip, path, dumpFrames);
+		case e: Err[RomTooBig] = failed(e.error);
+	};
 }
 
 fun endsWith(s: str, suffix: str) -> bool = {
-    if (s.length() < suffix.length()) return false;
-    let offset = s.length() - suffix.length();
-    var k: i64 = 0;
-    while (k < suffix.length()) {
-        if (s[offset + k] != suffix[k]) return false;
-        k = k + 1;
-    }
-    return true;
+	if (s.length() < suffix.length()) return false;
+	let offset = s.length() - suffix.length();
+	var k: i64 = 0;
+	while (k < suffix.length()) {
+		if (s[offset + k] != suffix[k]) return false;
+		k = k + 1;
+	}
+	return true;
 }
 
 fun asmFailed(path: str, e: ref OctoError) -> AppResult = failed(AsmFailed(path.toString(), e.line, copy e.message));
@@ -64,72 +64,72 @@ fun asmFailed(path: str, e: ref OctoError) -> AppResult = failed(AsmFailed(path.
 # Assembles an Octo source, then runs it.
 #}
 fun runOcto(source: ref String, path: str, dumpFrames: i64) -> AppResult = {
-    return match (assembleOcto(source.asSlice())) {
-        case rom: Ok[String] = runRom(&rom.value, path, dumpFrames);
-        case e: Err[OctoError] = asmFailed(path, &e.error);
-    };
+	return match (assembleOcto(source.asSlice())) {
+		case rom: Ok[String] = runRom(&rom.value, path, dumpFrames);
+		case e: Err[OctoError] = asmFailed(path, &e.error);
+	};
 }
 
 #{
 # Runs a `.ch8` ROM, or a `.8o` Octo source after assembling it.
 #}
 fun runContent(content: ref String, path: str, dumpFrames: i64) -> AppResult = {
-    if (endsWith(path, ".8o")) return runOcto(content, path, dumpFrames);
-    return runRom(content, path, dumpFrames);
+	if (endsWith(path, ".8o")) return runOcto(content, path, dumpFrames);
+	return runRom(content, path, dumpFrames);
 }
 
 fun runFile(path: str, dumpFrames: i64) -> AppResult = {
-    return match (read_file(path)) {
-        case content: String = runContent(&content, path, dumpFrames);
-        case _ = failed(ReadFailed(path.toString()));
-    };
+	return match (read_file(path)) {
+		case content: String = runContent(&content, path, dumpFrames);
+		case _ = failed(ReadFailed(path.toString()));
+	};
 }
 
 fun fail(message: String) -> i64 = {
-    print(f"Error: {message}\n");
-    return 1;
+	print(f"Error: {message}\n");
+	return 1;
 }
 
 #{
 # Prints `error` and returns the process exit code for it.
 #}
 fun report(error: ref AppError) -> i64 = {
-    return match (error) {
-        case e: ref ReadFailed = fail(f"could not read {e.path}");
-        case e: RomTooBig = fail(f"ROM too big: {e.size} bytes, max {e.max}");
-        case e: TerminalError = e.report();
-        case e: TooSmall = fail(e.message());
-        case e: ref Halted = fail(f"CHIP-8 halted: {e.reason}");
-        case e: ref AsmFailed = fail(f"{e.path}:{e.line}: {e.message}");
-    };
+	return match (error) {
+		case e: ref ReadFailed = fail(f"could not read {e.path}");
+		case e: RomTooBig = fail(f"ROM too big: {e.size} bytes, max {e.max}");
+		case e: TerminalError = e.report();
+		case e: TooSmall = fail(e.message());
+		case e: ref Halted = fail(f"CHIP-8 halted: {e.reason}");
+		case e: ref AsmFailed = fail(f"{e.path}:{e.line}: {e.message}");
+	};
 }
 
 fun exitCode(result: ref AppResult) -> i64 = {
-    return match (result) {
-        case _: Ok[()] = 0i64;
-        case e: ref Err[AppError] = report(&e.error);
-    };
+	return match (result) {
+		case _: Ok[()] = 0i64;
+		case e: ref Err[AppError] = report(&e.error);
+	};
 }
 
 fun main() = {
-    var args = read_cmdline();
-    if (args.isEmpty()) exit_with_error("Could not read /proc/self/cmdline");
-    if (args.value().length() < 2i64) exit_with_error(USAGE);
+	var args = read_cmdline();
+	if (args.isEmpty()) exit_with_error("Could not read /proc/self/cmdline");
+	if (args.value().length() < 2i64) exit_with_error(USAGE);
 
-    if (strEq(args.value().at(1i64).asSlice(), "-t")) {
-        var tests = allTests();
-        if (args.value().length() > 2i64) return runTests(&tests, args.value().at(2i64).asSlice());
-        return runTests(&tests, none);
-    }
+	if (strEq(args.value().at(1i64).asSlice(), "-t")) {
+		var tests = allTests();
+		if (args.value().length() > 2i64) return runTests(&tests, args.value().at(2i64).asSlice());
+		return runTests(&tests, none);
+	}
 
-    let path = args.value().at(1i64).asSlice();
-    var dumpFrames: i64 = -1;
-    if (args.value().length() > 2i64) {
-        if (args.value().length() != 4i64 or not strEq(args.value().at(2i64).asSlice(), "--dump")) exit_with_error(USAGE);
-        dumpFrames = parseCount(args.value().at(3i64).asSlice());
-        if (dumpFrames < 0) exit_with_error(USAGE);
-    }
+	let path = args.value().at(1i64).asSlice();
+	var dumpFrames: i64 = -1;
+	if (args.value().length() > 2i64) {
+		if (args.value().length() != 4i64 or not strEq(args.value().at(2i64).asSlice(), "--dump")) exit_with_error(USAGE);
+		dumpFrames = parseCount(args.value().at(3i64).asSlice());
+		if (dumpFrames < 0) exit_with_error(USAGE);
+	}
 
-    var result = runFile(path, dumpFrames);
-    return exitCode(&result);
+	var result = runFile(path, dumpFrames);
+	return exitCode(&result);
 }

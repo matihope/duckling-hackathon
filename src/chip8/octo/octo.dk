@@ -442,9 +442,9 @@ fun jsNumber(t: str) -> f64 = {
 # ========== TOKENS ===========
 
 class Token {
-	text: String;          # identifier / keyword / string literal contents
+	text: String; # identifier / keyword / string literal contents
 	isNumber: bool = false;
-	value: f64 = 0.0;      # when `isNumber`
+	value: f64 = 0.0; # when `isNumber`
 	line: i64 = 1;
 }
 
@@ -461,7 +461,7 @@ fun wordToken(text: ref String, line: i64) -> Token = {
 class Sym {
 	name: String;
 	value: f64 = 0.0;
-	mutable: bool = false;   # defined by :calc, may be redefined
+	mutable: bool = false; # defined by :calc, may be redefined
 }
 
 class Proto {
@@ -509,24 +509,24 @@ fun setSym(list: ref List[Sym], name: str, value: f64, mutable: bool) = {
 }
 
 class OctoCompiler {
-	rom: List[i64];            # -1 = not defined yet
+	rom: List[i64]; # -1 = not defined yet
 	here: i64 = 0x200;
 	tokens: List[Token];
 	cur: i64 = 0;
-	pending: List[Token];      # tokens spliced in by macros, last = next to read
-	line: i64 = 1;             # line of the last token read
-	lastLine: i64 = 1;         # line count of the source, for EOF errors
+	pending: List[Token]; # tokens spliced in by macros, last = next to read
+	line: i64 = 1; # line of the last token read
+	lastLine: i64 = 1; # line count of the source, for EOF errors
 	loops: List[i64];
 	loopLines: List[i64];
-	whiles: List[i64];         # -1 marks the start of a loop
+	whiles: List[i64]; # -1 marks the start of a loop
 	branches: List[i64];
 	branchLines: List[i64];
 	branchIsElse: List[bool];
-	dict: List[Sym];           # labels
+	dict: List[Sym]; # labels
 	constants: List[Sym];
 	aliases: List[Sym];
-	protos: List[Proto];       # forward references
-	longproto: List[i64];      # addresses holding 16-bit forward references
+	protos: List[Proto]; # forward references
+	longproto: List[i64]; # addresses holding 16-bit forward references
 	macros: List[Macro];
 	modes: List[StringMode];
 	hasmain: bool = true;
@@ -585,7 +585,10 @@ class OctoCompiler {
 		}
 	}
 
-	fun isWord(t: ref Token, word: str) -> bool = not t.isNumber and sameText(t.text.asSlice(), word);
+	fun isWord(t: ref Token, word: str) -> bool = not t.isNumber and sameText(
+		t.text.asSlice(),
+		word
+	);
 
 	fun peekIs(word: str) -> bool = {
 		if (atEnd()) return false;
@@ -1077,14 +1080,14 @@ class OctoCompiler {
 				inst(0x6F, shortValue());
 			}
 			if (sameText(op, ">") or sameText(op, "<=")) {
-				fourop(0x8, 0xF, r, 0x5);      # vf -= vx
+				fourop(0x8, 0xF, r, 0x5); # vf -= vx
 			} else {
-				fourop(0x8, 0xF, r, 0x7);      # vf =- vx
+				fourop(0x8, 0xF, r, 0x7); # vf =- vx
 			}
 			if (sameText(op, ">") or sameText(op, "<")) {
-				inst(0x4F, 0);                 # if vf != 0 then
+				inst(0x4F, 0); # if vf != 0 then
 			} else {
-				inst(0x3F, 0);                 # if vf == 0 then
+				inst(0x3F, 0); # if vf == 0 then
 			}
 		} else if (opToken.isNumber) {
 			fail(f"Expected conditional operator, got {opToken.text}.");
@@ -1258,7 +1261,10 @@ class OctoCompiler {
 		var a: i64 = 0;
 		while (a < macros.at(m).args.length() and not failed) {
 			if (atEnd()) {
-				failAt(f"Not enough arguments for expansion of macro '{macros.at(m).name}'.", lastLine);
+				failAt(
+					f"Not enough arguments for expansion of macro '{macros.at(m).name}'.",
+					lastLine
+				);
 			} else {
 				args.push(take());
 			}
@@ -1310,7 +1316,10 @@ class OctoCompiler {
 			var k: i64 = 0;
 			while (k < modes.at(m).chars.length()) {
 				if (modes.at(m).chars.at(k).ch == ch) {
-					failAt(f"String mode '{name.text}' is already defined for the character '{ch}'.", alphabetLine);
+					failAt(
+						f"String mode '{name.text}' is already defined for the character '{ch}'.",
+						alphabetLine
+					);
 					return;
 				}
 				k = k + 1;
@@ -1338,7 +1347,10 @@ class OctoCompiler {
 				k = k + 1;
 			}
 			if (found < 0) {
-				failAt(f"String mode '{modes.at(m).name}' is not defined for the character '{ch}'.", stringLine);
+				failAt(
+					f"String mode '{modes.at(m).name}' is not defined for the character '{ch}'.",
+					stringLine
+				);
 				return;
 			}
 			let calls = modes.at(m).calls;
@@ -1695,7 +1707,10 @@ class OctoCompiler {
 							if (c == '\n') ln = ln + 1;
 							if (c == '\\') {
 								if (index >= src.length()) {
-									failAt("Missing a closing \" in a string literal.".toString(), ln);
+									failAt(
+										"Missing a closing \" in a string literal.".toString(),
+										ln
+									);
 								} else {
 									let esc = src[index];
 									index = index + 1;
@@ -1714,7 +1729,10 @@ class OctoCompiler {
 									} else if (esc == '"') {
 										c = '"';
 									} else {
-										failAt(f"Unrecognized escape character '{esc}' in a string literal.", ln);
+										failAt(
+											f"Unrecognized escape character '{esc}' in a string literal.",
+											ln
+										);
 									}
 								}
 							}
@@ -1754,7 +1772,7 @@ class OctoCompiler {
 		aliases.push(Sym("unpack-lo".toString(), 1.0, false));
 
 		tokenize(src);
-		inst(0, 0);   # reserved jump to main
+		inst(0, 0); # reserved jump to main
 		while (not atEnd() and not failed) {
 			var t = take();
 			if (t.isNumber) {
@@ -1781,13 +1799,19 @@ class OctoCompiler {
 			return;
 		}
 		if (loops.length() > 0) {
-			failAt("This 'loop' does not have a matching 'again'.".toString(), loopLines.at(loopLines.length() - 1));
+			failAt(
+				"This 'loop' does not have a matching 'again'.".toString(),
+				loopLines.at(loopLines.length() - 1)
+			);
 			return;
 		}
 		if (branches.length() > 0) {
 			var kind = "begin";
 			if (branchIsElse.at(branchIsElse.length() - 1)) kind = "else";
-			failAt(f"This '{kind}' does not have a matching 'end'.", branchLines.at(branchLines.length() - 1));
+			failAt(
+				f"This '{kind}' does not have a matching 'end'.",
+				branchLines.at(branchLines.length() - 1)
+			);
 		}
 	}
 

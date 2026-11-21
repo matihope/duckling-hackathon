@@ -38,7 +38,10 @@ fun compareBytes(name: str, got: ref String, expected: ref String) = {
 			differ = a != b;
 			if (not differ) first = first + 1;
 		}
-		check(false, f"{name}: {got.length()} bytes vs {expected.length()} expected, first difference at {hex(0x200 + first)}".asSlice());
+		check(
+			false,
+			f"{name}: {got.length()} bytes vs {expected.length()} expected, first difference at {hex(0x200 + first)}".asSlice()
+		);
 	}
 }
 
@@ -90,10 +93,28 @@ fun steps(c: ref Chip8, n: i64) = {
 	}
 }
 
+fun testEncoding() = {
+	var c: Chip8;
+	c.reset();
+	expand octo("c", ": main  clear  v3 := 0x2A  sprite v1 v2 15  0x12 0x34  :byte 0xF0");
+	checkEq(c.mem[0x200], 0x00, "clear hi");
+	checkEq(c.mem[0x201], 0xE0, "clear lo");
+	checkEq(c.mem[0x202], 0x63, "v3 := hi");
+	checkEq(c.mem[0x203], 0x2A, "v3 := lo");
+	checkEq(c.mem[0x204], 0xD1, "sprite hi");
+	checkEq(c.mem[0x205], 0x2F, "sprite lo");
+	checkEq(c.mem[0x206], 0x12, "raw byte 1");
+	checkEq(c.mem[0x207], 0x34, "raw byte 2");
+	checkEq(c.mem[0x208], 0xF0, ":byte");
+}
+
 fun testInlineOcto() = {
 	var c: Chip8;
 	c.reset();
-	expand octo("c", ": main  v3 := 250  v3 += 10  v4 := 3  loop  v4 -= 1  if v4 != 0 then  again  i := data  load v1  : data  0x2A 0x07");
+	expand octo(
+		"c",
+		": main  v3 := 250  v3 += 10  v4 := 3  loop  v4 -= 1  if v4 != 0 then  again  i := data  load v1  : data  0x2A 0x07"
+	);
 	steps(&c, 20);
 	checkEq(c.v[3], 4, "250 + 10 wraps");
 	checkEq(c.v[4], 0, "loop ran down");
@@ -104,7 +125,10 @@ fun testInlineOcto() = {
 fun testMacrosAndCalc() = {
 	var c: Chip8;
 	c.reset();
-	expand octo("c", ":const BASE 10  :calc DOUBLE { BASE * 2 + 1 }  :macro set REG VAL { REG := VAL }  :macro count REG { REG := CALLS }  : main  set v3 DOUBLE  count v4  count v5");
+	expand octo(
+		"c",
+		":const BASE 10  :calc DOUBLE { BASE * 2 + 1 }  :macro set REG VAL { REG := VAL }  :macro count REG { REG := CALLS }  : main  set v3 DOUBLE  count v4  count v5"
+	);
 	steps(&c, 3);
 	checkEq(c.v[3], 30, ":calc is right-associative without precedence: 10 * (2 + 1)");
 	checkEq(c.v[4], 0, "first CALLS");
@@ -114,7 +138,10 @@ fun testMacrosAndCalc() = {
 fun testIfBeginElse() = {
 	var c: Chip8;
 	c.reset();
-	expand octo("c", ": main  v0 := 5  if v0 > 3 begin  v1 := 1  else  v1 := 2  end  if v0 < 3 begin  v2 := 1  else  v2 := 2  end  loop again");
+	expand octo(
+		"c",
+		": main  v0 := 5  if v0 > 3 begin  v1 := 1  else  v1 := 2  end  if v0 < 3 begin  v2 := 1  else  v2 := 2  end  loop again"
+	);
 	steps(&c, 20);
 	checkEq(c.v[1], 1, "5 > 3 takes begin branch");
 	checkEq(c.v[2], 2, "5 < 3 takes else branch");
@@ -130,6 +157,7 @@ fun testForwardJumpMain() = {
 }
 
 fun addOctoTests(tests: ref List[TestCase]) = {
+	tests.push(TestCase("octo.encoding", testEncoding));
 	tests.push(TestCase("octo.inline", testInlineOcto));
 	tests.push(TestCase("octo.macros_calc", testMacrosAndCalc));
 	tests.push(TestCase("octo.if_begin_else", testIfBeginElse));

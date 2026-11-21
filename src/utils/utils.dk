@@ -1,75 +1,75 @@
 import core.builtins as builtins;
 import core.containers as containers;
 
-extern("C") {
-    fundecl fopen(path: cptr char, mode: cptr char) -> cptr u8;
-    fundecl fread(buf: cptr u8, size: u64, n: u64, f: cptr u8) -> u64;
-    fundecl fclose(f: cptr u8) -> i32;
-    fundecl exit(exit_code: u32) -> void;
+extern ("C") {
+	fundecl fopen(path: cptr char, mode: cptr char) -> cptr u8;
+	fundecl fread(buf: cptr u8, size: u64, n: u64, f: cptr u8) -> u64;
+	fundecl fclose(f: cptr u8) -> i32;
+	fundecl exit(exit_code: u32) -> void;
 }
 
-const CHUNK: i64 = 4096;  # same as page size
+const CHUNK: i64 = 4096; # same as page size
 
 #{
     Opens `path` with the given C `mode`. `path` doesn't have to be NUL-terminated.
 #}
 fun open_file(path: str, mode: str) -> cptr u8 = {
-    var c_path: String;
-    c_path.append(path);
-    c_path.append('\0');
-    var c_mode: String;
-    c_mode.append(mode);
-    c_mode.append('\0');
-    return fopen(c_path.pointer as cptr char, c_mode.pointer as cptr char);
+	var c_path: String;
+	c_path.append(path);
+	c_path.append('\0');
+	var c_mode: String;
+	c_mode.append(mode);
+	c_mode.append('\0');
+	return fopen(c_path.pointer as cptr char, c_mode.pointer as cptr char);
 }
 
 # Whole contents of the file, or none when it can't be opened.
 fun read_file(path: str) -> ?String = {
-    let f = open_file(path, "r");
-    if (f as u64 == 0u64) return none;
+	let f = open_file(path, "r");
+	if (f as u64 == 0u64) return none;
 
-    var content: String;
-    let chunk = allocation[char].many_alloc(CHUNK);
-    var n = fread(chunk as cptr u8, 1u64, CHUNK as u64, f) as i64;
-    while (n > 0i64) {
-        var i = 0i64;
-        while (i < n) {
-            content.append(chunk[i]);
-            i = i + 1i64;
-        }
-        n = fread(chunk as cptr u8, 1u64, CHUNK as u64, f) as i64;
-    }
-    allocation[char].many_free(chunk);
-    fclose(f);
-    return content;
+	var content: String;
+	let chunk = allocation[char].many_alloc(CHUNK);
+	var n = fread(chunk as cptr u8, 1u64, CHUNK as u64, f) as i64;
+	while (n > 0i64) {
+		var i = 0i64;
+		while (i < n) {
+			content.append(chunk[i]);
+			i = i + 1i64;
+		}
+		n = fread(chunk as cptr u8, 1u64, CHUNK as u64, f) as i64;
+	}
+	allocation[char].many_free(chunk);
+	fclose(f);
+	return content;
 }
 
 # Splits `s` into the pieces terminated by `\0`.
 fun split_nul(s: ref String) -> List[String] = {
-    var parts: List[String];
-    var current: String;
-    var i = 0i64;
-    while (i < s.length()) {
-        if (s.at(i) == '\0') {
-            parts.push(move current);
-            current = stringReserve(0i64);
-        } else {
-            current.append(s.at(i));
-        }
-        i = i + 1i64;
-    }
-    return parts;
+	var parts: List[String];
+	var current: String;
+	var i = 0i64;
+	while (i < s.length()) {
+		if (s.at(i) == '\0') {
+			parts.push(move current);
+			current = stringReserve(0i64);
+		} else {
+			current.append(s.at(i));
+		}
+		i = i + 1i64;
+	}
+	return parts;
 }
 
 # Program arguments (argv[0] first), or none when the file can't be opened.
 # @note Linux only.
 fun read_cmdline() -> ?List[String] = {
-    var content = read_file("/proc/self/cmdline");
-    if (content.isEmpty()) return none;
-    return split_nul(content.value());
+	var content = read_file("/proc/self/cmdline");
+	if (content.isEmpty()) return none;
+	return split_nul(content.value());
 }
 
 fun exit_with_error(er: str) -> void = {
-    print(f"Error: {er}");
-    exit(1u8);
+	print(f"Error: {er}");
+	exit(1u8);
 }

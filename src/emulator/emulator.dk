@@ -11,8 +11,8 @@ import src.tui.render.*;
 import src.errors.*;
 
 # ========== TIMING ===========
-const FRAME_NS: i64 = 16666667;      # 60 Hz
-const CYCLES_PER_FRAME: i64 = 11;    # ~660 instructions per second
+const FRAME_NS: i64 = 16666667; # 60 Hz
+const CYCLES_PER_FRAME: i64 = 11; # ~660 instructions per second
 # Terminals report key presses but not releases, so a key counts as held
 # for this long after its last byte (auto-repeat keeps refreshing it).
 const KEY_HOLD_NS: i64 = 300000000;
@@ -58,7 +58,7 @@ fun keyFor(b: u8) -> i64 = {
 }
 
 class Keypad {
-	heldUntil: i64[16];  # ns timestamp until which each key counts as pressed
+	heldUntil: i64[16]; # ns timestamp until which each key counts as pressed
 	quit: bool = false;
 
 	#{

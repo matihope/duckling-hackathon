@@ -9,7 +9,7 @@ import src.tui.STDOUT_FILENO;
 
 class TestCase {
 	name: str;
-	body: funptr() -> ();
+	body: funptr () -> ();
 }
 
 # Failure messages of the running test; cleared before each test.

@@ -13,7 +13,7 @@ import src.result.Ok;
 import src.result.Err;
 import src.result.Result;
 
-extern("C") {
+extern ("C") {
 	fundecl rand() -> i32;
 }
 
@@ -27,67 +27,215 @@ const STACK_SIZE: i64 = 16;
 
 # `var`, not `const`: a const array literal hangs duckc.
 var FONT: u8[80] = [
-	0xF0u8, 0x90u8, 0x90u8, 0x90u8, 0xF0u8, # 0
-	0x20u8, 0x60u8, 0x20u8, 0x20u8, 0x70u8, # 1
-	0xF0u8, 0x10u8, 0xF0u8, 0x80u8, 0xF0u8, # 2
-	0xF0u8, 0x10u8, 0xF0u8, 0x10u8, 0xF0u8, # 3
-	0x90u8, 0x90u8, 0xF0u8, 0x10u8, 0x10u8, # 4
-	0xF0u8, 0x80u8, 0xF0u8, 0x10u8, 0xF0u8, # 5
-	0xF0u8, 0x80u8, 0xF0u8, 0x90u8, 0xF0u8, # 6
-	0xF0u8, 0x10u8, 0x20u8, 0x40u8, 0x40u8, # 7
-	0xF0u8, 0x90u8, 0xF0u8, 0x90u8, 0xF0u8, # 8
-	0xF0u8, 0x90u8, 0xF0u8, 0x10u8, 0xF0u8, # 9
-	0xF0u8, 0x90u8, 0xF0u8, 0x90u8, 0x90u8, # A
-	0xE0u8, 0x90u8, 0xE0u8, 0x90u8, 0xE0u8, # B
-	0xF0u8, 0x80u8, 0x80u8, 0x80u8, 0xF0u8, # C
-	0xE0u8, 0x90u8, 0x90u8, 0x90u8, 0xE0u8, # D
-	0xF0u8, 0x80u8, 0xF0u8, 0x80u8, 0xF0u8, # E
-	0xF0u8, 0x80u8, 0xF0u8, 0x80u8, 0x80u8  # F
+	0xF0u8,
+	0x90u8,
+	0x90u8,
+	0x90u8,
+	0xF0u8, # 0
+	0x20u8,
+	0x60u8,
+	0x20u8,
+	0x20u8,
+	0x70u8, # 1
+	0xF0u8,
+	0x10u8,
+	0xF0u8,
+	0x80u8,
+	0xF0u8, # 2
+	0xF0u8,
+	0x10u8,
+	0xF0u8,
+	0x10u8,
+	0xF0u8, # 3
+	0x90u8,
+	0x90u8,
+	0xF0u8,
+	0x10u8,
+	0x10u8, # 4
+	0xF0u8,
+	0x80u8,
+	0xF0u8,
+	0x10u8,
+	0xF0u8, # 5
+	0xF0u8,
+	0x80u8,
+	0xF0u8,
+	0x90u8,
+	0xF0u8, # 6
+	0xF0u8,
+	0x10u8,
+	0x20u8,
+	0x40u8,
+	0x40u8, # 7
+	0xF0u8,
+	0x90u8,
+	0xF0u8,
+	0x90u8,
+	0xF0u8, # 8
+	0xF0u8,
+	0x90u8,
+	0xF0u8,
+	0x10u8,
+	0xF0u8, # 9
+	0xF0u8,
+	0x90u8,
+	0xF0u8,
+	0x90u8,
+	0x90u8, # A
+	0xE0u8,
+	0x90u8,
+	0xE0u8,
+	0x90u8,
+	0xE0u8, # B
+	0xF0u8,
+	0x80u8,
+	0x80u8,
+	0x80u8,
+	0xF0u8, # C
+	0xE0u8,
+	0x90u8,
+	0x90u8,
+	0x90u8,
+	0xE0u8, # D
+	0xF0u8,
+	0x80u8,
+	0xF0u8,
+	0x80u8,
+	0xF0u8, # E
+	0xF0u8,
+	0x80u8,
+	0xF0u8,
+	0x80u8,
+	0x80u8 # F
 ];
 
 # ========== INSTRUCTIONS ===========
 # One class per opcode; `x`/`y` are register indices, `nn` a byte, `nnn` an address.
 
-class Cls {}                                  # 00E0
-class Ret {}                                  # 00EE
-class Jump { nnn: u16; }                      # 1NNN
-class Call { nnn: u16; }                      # 2NNN
-class SkipEqImm { x: i64; nn: u8; }           # 3XNN
-class SkipNeImm { x: i64; nn: u8; }           # 4XNN
-class SkipEqReg { x: i64; y: i64; }           # 5XY0
-class LoadImm { x: i64; nn: u8; }             # 6XNN
-class AddImm { x: i64; nn: u8; }              # 7XNN
-class Move { x: i64; y: i64; }                # 8XY0
-class Or { x: i64; y: i64; }                  # 8XY1
-class And { x: i64; y: i64; }                 # 8XY2
-class Xor { x: i64; y: i64; }                 # 8XY3
-class AddReg { x: i64; y: i64; }              # 8XY4
-class Sub { x: i64; y: i64; }                 # 8XY5
-class ShiftRight { x: i64; y: i64; }          # 8XY6
-class SubN { x: i64; y: i64; }                # 8XY7
-class ShiftLeft { x: i64; y: i64; }           # 8XYE
-class SkipNeReg { x: i64; y: i64; }           # 9XY0
-class LoadI { nnn: u16; }                     # ANNN
-class JumpV0 { nnn: u16; }                    # BNNN
-class Random { x: i64; nn: u8; }              # CXNN
-class Draw { x: i64; y: i64; n: i64; }        # DXYN
-class SkipKey { x: i64; }                     # EX9E
-class SkipNotKey { x: i64; }                  # EXA1
-class LoadDelay { x: i64; }                   # FX07
-class WaitKey { x: i64; }                     # FX0A
-class SetDelay { x: i64; }                    # FX15
-class SetSound { x: i64; }                    # FX18
-class AddI { x: i64; }                        # FX1E
-class LoadFont { x: i64; }                    # FX29
-class StoreBcd { x: i64; }                    # FX33
-class StoreRegs { x: i64; }                   # FX55
-class LoadRegs { x: i64; }                    # FX65
-class Unknown { op: u16; }
+class Cls {} # 00E0
+class Ret {} # 00EE
+class Jump {
+	nnn: u16;
+} # 1NNN
+class Call {
+	nnn: u16;
+} # 2NNN
+class SkipEqImm {
+	x: i64;
+	nn: u8;
+} # 3XNN
+class SkipNeImm {
+	x: i64;
+	nn: u8;
+} # 4XNN
+class SkipEqReg {
+	x: i64;
+	y: i64;
+} # 5XY0
+class LoadImm {
+	x: i64;
+	nn: u8;
+} # 6XNN
+class AddImm {
+	x: i64;
+	nn: u8;
+} # 7XNN
+class Move {
+	x: i64;
+	y: i64;
+} # 8XY0
+class Or {
+	x: i64;
+	y: i64;
+} # 8XY1
+class And {
+	x: i64;
+	y: i64;
+} # 8XY2
+class Xor {
+	x: i64;
+	y: i64;
+} # 8XY3
+class AddReg {
+	x: i64;
+	y: i64;
+} # 8XY4
+class Sub {
+	x: i64;
+	y: i64;
+} # 8XY5
+class ShiftRight {
+	x: i64;
+	y: i64;
+} # 8XY6
+class SubN {
+	x: i64;
+	y: i64;
+} # 8XY7
+class ShiftLeft {
+	x: i64;
+	y: i64;
+} # 8XYE
+class SkipNeReg {
+	x: i64;
+	y: i64;
+} # 9XY0
+class LoadI {
+	nnn: u16;
+} # ANNN
+class JumpV0 {
+	nnn: u16;
+} # BNNN
+class Random {
+	x: i64;
+	nn: u8;
+} # CXNN
+class Draw {
+	x: i64;
+	y: i64;
+	n: i64;
+} # DXYN
+class SkipKey {
+	x: i64;
+} # EX9E
+class SkipNotKey {
+	x: i64;
+} # EXA1
+class LoadDelay {
+	x: i64;
+} # FX07
+class WaitKey {
+	x: i64;
+} # FX0A
+class SetDelay {
+	x: i64;
+} # FX15
+class SetSound {
+	x: i64;
+} # FX18
+class AddI {
+	x: i64;
+} # FX1E
+class LoadFont {
+	x: i64;
+} # FX29
+class StoreBcd {
+	x: i64;
+} # FX33
+class StoreRegs {
+	x: i64;
+} # FX55
+class LoadRegs {
+	x: i64;
+} # FX65
+class Unknown {
+	op: u16;
+}
 
-const Instruction = Cls | Ret | Jump | Call | SkipEqImm | SkipNeImm | SkipEqReg | LoadImm
-	| AddImm | Move | Or | And | Xor | AddReg | Sub | ShiftRight | SubN | ShiftLeft | SkipNeReg
-	| LoadI | JumpV0 | Random | Draw | SkipKey | SkipNotKey | LoadDelay | WaitKey | SetDelay
-	| SetSound | AddI | LoadFont | StoreBcd | StoreRegs | LoadRegs | Unknown;
+const Instruction = Cls | Ret | Jump | Call | SkipEqImm | SkipNeImm | SkipEqReg | LoadImm | AddImm
+	| Move | Or | And | Xor | AddReg | Sub | ShiftRight | SubN | ShiftLeft | SkipNeReg | LoadI
+	| JumpV0 | Random | Draw | SkipKey | SkipNotKey | LoadDelay | WaitKey | SetDelay | SetSound
+	| AddI | LoadFont | StoreBcd | StoreRegs | LoadRegs | Unknown;
 
 #{
 # Turns a 16-bit opcode into its `Instruction`.
@@ -149,6 +297,18 @@ class RomTooBig {
 	max: i64;
 }
 
+# `0x`-prefixed, zero-padded 4-digit uppercase hex.
+fun hex4(v: i64) -> String = {
+	let digits = "0123456789ABCDEF";
+	var out = "0x".toString();
+	var shift: i64 = 12;
+	while (shift >= 0) {
+		out.append(digits[(v >> shift) & 15]);
+		shift = shift - 4;
+	}
+	return out;
+}
+
 # Wraps an address into the 4 KiB memory.
 fun wrapAddr(a: i64) -> i64 = a & (MEMORY_SIZE - 1);
 
@@ -160,13 +320,13 @@ class Chip8 {
 	pc: u16 = 0x200u16;
 	stack: u16[16];
 	sp: i64 = 0;
-	dt: u8 = 0u8;               # delay timer
-	st: u8 = 0u8;               # sound timer
-	display: bool[2048];        # pixel (x, y) at y * 64 + x
-	keys: bool[16];             # set by the frontend
-	screenDirty: bool = true;   # display changed since the frontend last drew it
+	dt: u8 = 0u8; # delay timer
+	st: u8 = 0u8; # sound timer
+	display: bool[2048]; # pixel (x, y) at y * 64 + x
+	keys: bool[16]; # set by the frontend
+	screenDirty: bool = true; # display changed since the frontend last drew it
 	waitingForFrame: bool = false; # DXYN ran this frame (display wait quirk)
-	heldKey: i64 = -1;          # FX0A: key seen pressed, waiting for its release
+	heldKey: i64 = -1; # FX0A: key seen pressed, waiting for its release
 	halted: bool = false;
 	haltReason: String;
 
@@ -493,6 +653,6 @@ class Chip8 {
 	}
 
 	fun exec(it: Unknown) = {
-		halt(f"unknown opcode {it.op} at {pc - 2u16}");
+		halt(f"unknown opcode {hex4(it.op as i64)} at {hex4((pc - 2u16) as i64)}");
 	}
 }

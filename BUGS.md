@@ -21,7 +21,7 @@
    ```
    error[E0]: Found a combination of function and non-function callables in a call expression.
    ```
-10) `public mut fun` nie parsuje się: `error[E0]: Expected an identifier here, but got: Keyword 'mut'.` Trzeba pisać `public fun`.
+10) ~~`public mut fun` nie parsuje się~~. Naprawione na `main` (#3996, nowy model mutowalności); dotyczyło starszego duckc.
 11) Moduł nie widzi modułu-rodzeństwa po samej nazwie: z `src/tests/tests.dk` import `testing.check` daje `Module not found.` Lookup szuka tylko wśród dzieci, przodków i nazwy pakietu. Obejście: `import src.testing.check;` (root nazywa się `src`).
 12) `str == str` się nie kompiluje (jest tylko `String == String`). Obejście: własny `strEq`.
 13) String literal wewnątrz `{}` w f-stringu: `f"{paint(RED, \"FAIL\")}"` daje `String unclosed before end of line.` Obejście: stała albo zmienna.
