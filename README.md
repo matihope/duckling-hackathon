@@ -50,7 +50,13 @@ one command.
 - Linux. The emulator reads its arguments from `/proc/self/cmdline` and talks to the
   terminal through termios.
 - The Duckling toolchain: `duck` and `duckc` on your `PATH`. `duck` uses the first
-  `duckc` it finds there.
+  `duckc` it finds there. Built and tested with these versions:
+
+  | Tool | Version | Commit | Date |
+  |---|---|---|---|
+  | `duckc` | 0.3-alpha | `f49326c51` | 2026-11-20 |
+  | DVM (`VM`) | 0.3-alpha | `f49326c51` | 2026-11-20 |
+  | `duck` | 0.3.0 | `203a4c60a` | 2026-11-13 |
 - A terminal with UTF-8. The screen needs 66x19 cells for CHIP-8 programs and 130x35 for
   SUPER-CHIP hires ones (the picture plus a border and a status line). If the window is
   too small you get a message saying how much room is needed.
