@@ -1,0 +1,19 @@
+###########################################
+#
+#  broken.8o: a demo of a program that goes wrong
+#
+#  Run:  duck run broken.8o --dump 10
+#
+#  It assembles fine: Octo emits raw bytes as they are.
+#  At run time the CPU reaches 0x0123, an opcode no
+#  machine has, and the emulator stops with an error
+#  instead of hanging.
+#
+###########################################
+
+: main
+	v0 := 0xA   v1 := 4   v2 := 4
+	i := hex v0
+	sprite v1 v2 5    # draw an "A" first, to show it runs
+	0x01 0x23         # not an instruction
+	loop again
