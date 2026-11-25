@@ -122,13 +122,8 @@ duck run --profile dvm -- -t
 ```
 
 `duck run` needs the `VM` binary on your `PATH`. Everything works the same as the
-native build, with three differences:
-
-- Starting takes about 7 seconds while the VM loads the bytecode.
-- Interactive play is slower: the VM redraws a hires screen about 5 times a second, so
-  SUPER-CHIP games run in slow motion. Headless `--dump` runs at full speed.
-- The VM passes arguments to the program as a comma-separated list, so a single argument
-  can't contain a comma.
+native build, except that the VM passes arguments to the program as a comma-separated
+list, so a single argument can't contain a comma.
 
 ## Examples
 
